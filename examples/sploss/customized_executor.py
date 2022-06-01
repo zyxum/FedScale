@@ -70,25 +70,6 @@ class Customized_Executor(Executor):
         self.ksploss = []
         self.sploss_gap = cfg['sploss_gap']
 
-    def init_control_communication(self):
-        """Create communication channel between coordinator and executor.
-        This channel serves control messages."""
-
-        logging.info(f"Connecting to Coordinator ({args.ps_ip}) for control plane communication ...")
-
-        self.grpc_server = grpc.server(
-            futures.ThreadPoolExecutor(max_workers=10),
-            options=[
-                ('grpc.max_send_message_length', 90000000),
-                ('grpc.max_receive_message_length', 90000000),
-            ],
-        )
-        job_api_pb2_grpc.add_JobServiceServicer_to_server(self, self.grpc_server)
-        port = '[::]:{}'.format(self.args.base_port + self.this_rank)
-        self.grpc_server.add_insecure_port(port)
-        self.grpc_server.start()
-        logging.info(f'Started GRPC server at {port} for control plane')
-
     def testing_handler(self, args):
         """Test model"""
         evalStart = time.time()
@@ -104,14 +85,14 @@ class Customized_Executor(Executor):
             test_loss, acc, acc_5, testResults, sploss_list, _ = test_res
             self.ksploss.append(sploss_list)
             logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(self.epoch, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
+                        .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
             test_res = test_model_sploss(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.ksploss[0])
             test_loss, acc, acc_5, testResults, sploss_list, sploss = test_res
             self.ksploss.append(sploss_list)
             self.ksploss.pop(0)
             logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(self.epoch, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
+                        .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
 
         gc.collect()
 

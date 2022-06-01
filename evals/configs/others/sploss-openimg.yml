@@ -38,7 +38,7 @@ job_conf:
     - total_worker: 100                      # Number of participants per round, we use K=100 in our paper, large K will be much slower
     - data_set: openImg                     # Dataset: openImg, google_speech, stackoverflow
     - data_dir: $FEDSCALE_HOME/dataset/data/openImg_r    # Path of the dataset
-    - data_map_file: $FEDSCALE_HOME/dataset/data/openImg/client_data_mapping/new_train.csv              # Allocation of data to each client, turn to iid setting if not provided
+    - data_map_file: $FEDSCALE_HOME/dataset/data/openImg_r/client_data_mapping/train.csv              # Allocation of data to each client, turn to iid setting if not provided
     - device_conf_file: $FEDSCALE_HOME/dataset/data/device_info/client_device_capacity     # Path of the client trace
     - device_avail_file: $FEDSCALE_HOME/dataset/data/device_info/client_behave_trace
     - model: resnet34                            # Models: e.g., shufflenet_v2_x2_0, mobilenet_v2, resnet34, albert-base-v2
@@ -50,5 +50,6 @@ job_conf:
     - learning_rate: 0.05
     - batch_size: 20
     - test_bsz: 20
+    - use_cuda: True
 
 
