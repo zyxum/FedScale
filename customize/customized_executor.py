@@ -27,13 +27,13 @@ class Customized_Executor(Executor):
         logging.info("Data partitioner starts ...")
 
         training_sets = Customized_DataPartitioner(data=train_dataset, args = self.args, numOfClass=self.args.num_class)
-        unique_clientId = training_sets.partition_data_helper(num_clients=self.args.total_worker, data_map_file=self.args.data_map_file)
+        self.unique_clientId = training_sets.partition_data_helper(num_clients=self.args.total_worker, data_map_file=self.args.data_map_file)
 
         testing_sets = Customized_DataPartitioner(data=test_dataset, args = self.args, numOfClass=self.args.num_class, isTest=True)
         testing_sets.partition_data_helper(num_clients=self.num_executors)
 
         val_sets = Customized_DataPartitioner(data=val_dataset, args = self.args, numOfClass=self.args.num_class)
-        val_sets.partition_data_helper(num_clients=self.args.total_worker, data_map_file=self.args.val_data_map_file, unique_clientId=unique_clientId)
+        val_sets.partition_data_helper(num_clients=self.args.total_worker, data_map_file=self.args.val_data_map_file, unique_clientId=self.unique_clientId)
 
         logging.info("Data partitioner competes ...")
 
@@ -50,8 +50,8 @@ class Customized_Executor(Executor):
         val_res = validate_model(clientId, model, client_data, self.device, criterion=criterion)
         
         val_loss, acc, acc_5, valResults = val_res
-        logging.info("At training round {}, client {} has val_loss {}, val_accuracy {:.2f}%, val_5_accuracy {:.2f}% \n"\
-                     .format(self.round, clientId, val_loss, acc, acc_5))
+        logging.info("At training round {}, client {} ({} labels) has val_loss {}, val_accuracy {:.2f}%, val_5_accuracy {:.2f}% \n"\
+                     .format(self.round, clientId, len(self.training_sets.client_label_cnt[clientId]), val_loss, acc, acc_5))
 
         return valResults
 

@@ -111,7 +111,6 @@ class DataPartitioner(object):
             indexes = indexes[part_len:]
 
     def use(self, partition, istest):
-        logging.info(f"datasize: {len(self.partitions)}")
         resultIndex = self.partitions[partition]
 
         exeuteLength = len(resultIndex) if not istest else int(len(resultIndex) * self.args.test_ratio)
