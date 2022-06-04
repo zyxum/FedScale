@@ -183,5 +183,5 @@ class Customized_Client(Client):
 
         results['update_weight'] = model_param
         results['wall_duration'] = 0
-
+        logging.info(f"CLIENT: {clientId} exits train function")
         return results, model

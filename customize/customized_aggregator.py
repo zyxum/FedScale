@@ -141,7 +141,6 @@ class Customized_Aggregator(Aggregator):
                 d_type = self.model_weights[p].data.dtype
                 self.model_weights[p].data = (self.model_weights[p]/float(self.tasks_round)).to(dtype=d_type)
         self.update_lock.release()
-        logging.info(f"finish client completion handler")
 
 if __name__ == "__main__":
     aggregator = Customized_Aggregator(args)
