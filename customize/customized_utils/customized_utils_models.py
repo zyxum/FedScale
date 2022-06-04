@@ -15,21 +15,21 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
     # only support image classification tasks
     with torch.no_grad():
         for data, target in val_data:
-            try:
-                data, target = Variable(data).to(device=device), Variable(target).to(device=device)
+            # try:
+            data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
-                output = model(data)
-                loss = criterion(output, target)
+            output = model(data)
+            loss = criterion(output, target)
 
-                val_loss += loss.data.item()
-                acc = accuracy(output, target, topk=(1,5))
+            val_loss += loss.data.item()
+            acc = accuracy(output, target, topk=(1,5))
 
-                correct += acc[0].item()
-                top_5 += acc[1].item()
+            correct += acc[0].item()
+            top_5 += acc[1].item()
             
-            except Exception as ex:
-                logging.info(f"Validation of {clientId} failed as {ex}")
-                break
+            # except Exception as ex:
+            #     logging.info(f"Validation of {clientId} failed as {ex}")
+            #     break
             val_len += len(target)
 
     val_len = max(val_len, 1)
@@ -107,4 +107,4 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
 
     testRes = {'top_1':correct, 'top_5':top_5, 'test_loss':sum_loss, 'sp_loss':torch.tensor(sploss), 'test_len':test_len}
 
-    return test_loss, acc, acc_5, testRes
+    return test_loss, acc, acc_5, testRes, sploss_list, sploss

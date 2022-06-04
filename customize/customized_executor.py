@@ -13,7 +13,12 @@ from customized_fllib import init_dataset
 from customized_utils.customized_utils_models import validate_model, test_model
 from customized_client import Customized_Client
 from customized_utils.customized_divide_data import Customized_DataPartitioner, select_dataset
+from config import cfg
 class Customized_Executor(Executor):
+    def __init__(self, args):
+        super().__init__(args)
+        self.ksploss = []
+        self.sploss_gap = cfg['sploss_gap']
 
     def run(self):
         self.setup_env()
