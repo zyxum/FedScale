@@ -1,16 +1,18 @@
 import logging
 import torch
+import gc
+import time
+
 from fedscale.core.executor import Executor
-from fedscale.core.utils.divide_data import DataPartitioner, select_dataset
 from fedscale.core.rlclient import RLClient
 from fedscale.core import events
 import fedscale.core.job_api_pb2 as job_api_pb2
 
 from customized_arg_parser import args
 from customized_fllib import init_dataset
-from customized_utils.customized_utils_models import validate_model
+from customized_utils.customized_utils_models import validate_model, test_model
 from customized_client import Customized_Client
-from customized_utils.customized_divide_data import Customized_DataPartitioner
+from customized_utils.customized_divide_data import Customized_DataPartitioner, select_dataset
 class Customized_Executor(Executor):
 
     def run(self):
@@ -83,6 +85,35 @@ class Customized_Executor(Executor):
             train_res, model = client.train(client_data=client_data, model=client_model, conf=conf)
 
         return train_res, model
+
+    def testing_handler(self, args):
+        """Test model"""
+        evalStart = time.time()
+        device = self.device
+        model = self.load_global_model()
+
+        data_loader = select_dataset(self.this_rank, self.testing_sets, batch_size=args.test_bsz, args = self.args, isTest=True, collate_fn=self.collate_fn)
+
+        criterion = torch.nn.CrossEntropyLoss().to(device=device)
+
+
+        if len(self.ksploss) != self.sploss_gap:
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion)
+            test_loss, acc, acc_5, testResults, sploss_list, _ = test_res
+            self.ksploss.append(sploss_list)
+            logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
+                        .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
+        else:
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.ksploss[0])
+            test_loss, acc, acc_5, testResults, sploss_list, sploss = test_res
+            self.ksploss.append(sploss_list)
+            self.ksploss.pop(0)
+            logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
+                        .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
+
+        gc.collect()
+
+        return testResults 
 
     def Train(self, config):
         """Integrate validation into training"""
