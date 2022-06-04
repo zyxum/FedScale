@@ -13,12 +13,16 @@ from customized_fllib import init_dataset
 from customized_utils.customized_utils_models import validate_model, test_model
 from customized_client import Customized_Client
 from customized_utils.customized_divide_data import Customized_DataPartitioner, select_dataset
+from customized_init_model import customized_init_model
 from config import cfg
 class Customized_Executor(Executor):
     def __init__(self, args):
         super().__init__(args)
         self.ksploss = []
         self.sploss_gap = cfg['sploss_gap']
+
+    def init_model(self):
+        return customized_init_model()
 
     def run(self):
         self.setup_env()
@@ -100,7 +104,6 @@ class Customized_Executor(Executor):
         data_loader = select_dataset(self.this_rank, self.testing_sets, batch_size=args.test_bsz, args = self.args, isTest=True, collate_fn=self.collate_fn)
 
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
-
 
         if len(self.ksploss) != self.sploss_gap:
             test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion)

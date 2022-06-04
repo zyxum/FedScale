@@ -4,13 +4,13 @@ from torchvision.models import ShuffleNetV2, ResNet
 from torchvision.models.resnet import BasicBlock, Bottleneck, conv1x1
 import torch.nn as nn
 import torch.nn.functional as F
-import torch
+import torch, logging
 
 def similarity_preserving_loss(x: Tensor):
     w = x.detach()
-    w = torch.reshape(x, (x.shape[0], -1))
-    w = torch.matmul(x, torch.t(x))
-    w = F.normalize(x, 2, 1)
+    w = torch.reshape(w, (w.shape[0], -1))
+    w = torch.matmul(w, torch.t(w))
+    w = F.normalize(w, 2, 1)
     return w.cpu()
 
 
@@ -92,7 +92,6 @@ class Resnet34_SPloss(ResNet):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
-
         return x, sploss_list
 
 def _resnet(

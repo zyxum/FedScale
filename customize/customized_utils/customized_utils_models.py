@@ -64,22 +64,22 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
 
     with torch.no_grad():
         for data, target in test_data:
-            try:
-                data, target = Variable(data).to(device=device), Variable(target).to(device=device)
+            # try:
+            data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
-                output, sploss_temp = model(data)
-                loss = criterion(output, target)
-                
-                test_loss += loss.data.item()  # Variable.data
-                acc = accuracy(output, target, topk=(1, 5))
-
-                correct += acc[0].item()
-                top_5 += acc[1].item()
-                sploss_list.append(sploss_temp)
+            output, sploss_temp = model(data, False)
+            loss = criterion(output, target)
             
-            except Exception as ex:
-                logging.info(f"Testing of failed as {ex}")
-                break
+            test_loss += loss.data.item()  # Variable.data
+            acc = accuracy(output, target, topk=(1, 5))
+
+            correct += acc[0].item()
+            top_5 += acc[1].item()
+            sploss_list.append(sploss_temp)
+        
+            # except Exception as ex:
+            #     logging.info(f"Testing of failed as {ex}")
+            #     break
             test_len += len(target)
 
     if len(reference) != 0:

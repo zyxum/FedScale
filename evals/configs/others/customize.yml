@@ -44,10 +44,10 @@ job_conf:
     - model: resnet34                            # Models: e.g., shufflenet_v2_x2_0, mobilenet_v2, resnet34, albert-base-v2
     - eval_interval: 1                     # How many rounds to run a testing on the testing set
     - epochs: 5000                          # Number of rounds to run this training. We use 1000 in our paper, while it may converge w/ ~400 rounds
-    - filter_less: 21                       # Remove clients w/ less than 21 samples
+    - filter_less: 31                       # Remove clients w/ less than 21 samples
     - num_loaders: 4
     - local_steps: 20
     - learning_rate: 0.05
-    - batch_size: 20
-    - test_bsz: 5
+    - batch_size: 32
+    - test_bsz: 32
     - malicious_factor: 4
