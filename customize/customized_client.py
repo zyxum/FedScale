@@ -67,7 +67,6 @@ class Customized_Client(Client):
             gt_boxes = Variable(torch.FloatTensor(1).cuda())
 
         # TODO: One may hope to run fixed number of epochs, instead of iterations
-        logging.info(f"Ready to train (CLIENT: {clientId}) ...")
         while completed_steps < conf.local_steps:
             
             try:
@@ -164,13 +163,11 @@ class Customized_Client(Client):
 
                     completed_steps += 1
 
-                    logging.info(f"client {clientId} completes {completed_steps} steps")
 
                     if completed_steps == conf.local_steps:
                         break
 
             except Exception as ex:
-                logging.info(f"error {ex}")
                 error_type = ex
                 break
         
@@ -187,5 +184,4 @@ class Customized_Client(Client):
 
         results['update_weight'] = model_param
         results['wall_duration'] = 0
-        logging.info(f"CLIENT: {clientId} exits train function")
         return results, model
