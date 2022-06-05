@@ -56,7 +56,7 @@ class Customized_Executor(Executor):
         """Validate model loss given client ids"""
 
         # not support rl or nlp tasks
-        client_data = select_dataset(clientId, self.val_sets, batch_size=self.args.test_bsz, args=self.args, isTest=True, collate_fn=self.collate_fn)
+        client_data = select_dataset(clientId, self.val_sets, batch_size=self.args.batch_size // 5, args=self.args, isTest=True, collate_fn=self.collate_fn)
         criterion = torch.nn.CrossEntropyLoss().to(device=self.device)
         val_res = validate_model(clientId, model, client_data, self.device, criterion=criterion)
         
