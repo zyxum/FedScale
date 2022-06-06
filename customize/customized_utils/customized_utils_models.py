@@ -62,7 +62,7 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
     sploss_list = []
     sploss = []
 
-    print(len(test_data))
+    logging.info(len(test_data))
     with torch.no_grad():
         for data, target in test_data:
             try:
