@@ -14,7 +14,7 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
     
     # only support image classification tasks
     with torch.no_grad():
-        logging.info(len(val_data))
+        logging.info(f"val: {len(val_data)}")
         for data, target in val_data:
             try:
                 data, target = Variable(data).to(device=device), Variable(target).to(device=device)
