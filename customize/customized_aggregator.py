@@ -17,6 +17,7 @@ class Customized_Aggregator(Aggregator):
         self.client_loss_accumulator = {}
     
     def init_model(self):
+        assert self.args.engine == events.PYTORCH, "Please define model for non-PyTorch models"
         self.model = customized_init_model()
         self.model_weights = self.model.state_dict()
 
@@ -110,7 +111,6 @@ class Customized_Aggregator(Aggregator):
                 self.virtual_client_clock[results['clientId']]['communication']
         )
 
-        device = self.device
         """
             [FedAvg] "Communication-Efficient Learning of Deep Networks from Decentralized Data".
             H. Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, Blaise Aguera y Arcas. AISTATS, 2017
@@ -128,13 +128,13 @@ class Customized_Aggregator(Aggregator):
                 temp_list = results['update_weight'][p]
                 if isinstance(results['update_weight'][p], list):
                     temp_list = np.asarray(temp_list, dtype=np.float32)
-                self.model_weights[p].data = torch.from_numpy(temp_list).to(device=device)
+                self.model_weights[p].data = torch.from_numpy(temp_list).to(device=self.device)
         else:
             for p in results['update_weight']:
                 temp_list = results['update_weight'][p]
                 if isinstance(results['update_weight'][p], list):
                     temp_list = np.asarray(temp_list, dtype=np.float32)
-                self.model_weights[p].data += torch.from_numpy(temp_list).to(device=device)
+                self.model_weights[p].data += torch.from_numpy(temp_list).to(device=self.device)
 
         if self.model_in_update == self.tasks_round:
             for p in self.model_weights:
