@@ -18,7 +18,7 @@ from config import cfg
 class Customized_Executor(Executor):
     def __init__(self, args):
         super().__init__(args)
-        self.ksploss = []
+        self.klayers_outputs = []
         self.sploss_gap = cfg['sploss_gap']
 
     def init_model(self):
@@ -105,17 +105,17 @@ class Customized_Executor(Executor):
 
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
 
-        if len(self.ksploss) != self.sploss_gap:
+        if len(self.klayers_outputs) != self.sploss_gap:
             test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion)
-            test_loss, acc, acc_5, testResults, sploss_list, _ = test_res
-            self.ksploss.append(sploss_list)
+            test_loss, acc, acc_5, testResults, layers_outputs, _ = test_res
+            self.klayers_outputs.append(layers_outputs)
             logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
                         .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
             test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.ksploss[0])
-            test_loss, acc, acc_5, testResults, sploss_list, sploss = test_res
-            self.ksploss.append(sploss_list)
-            self.ksploss.pop(0)
+            test_loss, acc, acc_5, testResults, layers_outputs, sploss = test_res
+            self.klayers_outputs.append(layers_outputs)
+            self.klayers_outputs.pop(0)
             logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
                         .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
 

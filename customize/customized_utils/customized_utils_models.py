@@ -1,8 +1,18 @@
 from torch.autograd import Variable
 import torch.nn as nn
 import torch, logging
+import torch.nn.functional as F
+from net2net import get_model_layer
 
 from fedscale.core.utils.utils_model import accuracy
+
+def layer_batch_norm(x):
+    x = torch.reshape(x, (x.shape[0], -1))
+    x = torch.matmul(x, torch.t(x))
+    x = F.normalize(x, 2, 1)
+    return x
+
+
 def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss(), tokenizer=None):
     val_loss = 0
     correct = 0
@@ -13,25 +23,25 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
     model.eval()
     
     # only support image classification tasks
-    # with torch.no_grad():
-    #     logging.info(f"val: {len(val_data)}")
-    #     for data, target in val_data:
-    #         try:
-    #             data, target = Variable(data).to(device=device), Variable(target).to(device=device)
+    with torch.no_grad():
+        logging.info(f"val: {len(val_data)}")
+        for data, target in val_data:
+            try:
+                data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
-    #             output = model(data)
-    #             loss = criterion(output, target)
+                output = model(data)
+                loss = criterion(output, target)
 
-    #             val_loss += loss.data.item()
-    #             acc = accuracy(output, target, topk=(1,5))
+                val_loss += loss.data.item()
+                acc = accuracy(output, target, topk=(1,5))
 
-    #             correct += acc[0].item()
-    #             top_5 += acc[1].item()
+                correct += acc[0].item()
+                top_5 += acc[1].item()
             
-    #         except Exception as ex:
-    #             logging.info(f"Validation of {clientId} failed as {ex}")
-    #             break
-    #         val_len += len(target)
+            except Exception as ex:
+                logging.info(f"Validation of {clientId} failed as {ex}")
+                break
+            val_len += len(target)
 
     val_len = max(val_len, 1)
     # loss function averages over batch size
@@ -50,7 +60,7 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
 
     return val_loss, acc, acc_5, valRes
 
-def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), reference=[]):
+def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), reference=[], layers_names=[]):
 
     test_loss = 0
     correct = 0
@@ -60,8 +70,23 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
 
     model = model.to(device=device) # load by pickle
     model.eval()
-    sploss_list = []
-    sploss = []
+    sploss = {}
+
+    layers_outputs = []
+    layer_output = {}
+    hook_handles = []
+    
+    def get_activation(name):
+        def hook(model, input, output):
+            layer_output[name] = output.detach()
+        return hook
+
+    # register hooks
+    for layer_name in layers_names:
+        layer = get_model_layer(model, layer_name)
+        hook_handles.append(
+            layer.register_forward_hook(get_activation(layer_name))
+        )
 
     logging.info(len(test_data))
     with torch.no_grad():
@@ -69,7 +94,7 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
             try:
                 data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
-                output, sploss_temp = model(data, False)
+                output= model(data, False)
                 loss = criterion(output, target)
                 
                 test_loss += loss.data.item()  # Variable.data
@@ -77,7 +102,11 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
 
                 correct += acc[0].item()
                 top_5 += acc[1].item()
-                sploss_list.append(sploss_temp)
+
+                # transform and record layer output
+                for key in layer_output.keys():
+                    layer_output[key] = layer_batch_norm(layer_output[key])
+                layers_outputs.append(layer_output)
         
             except Exception as ex:
                 logging.info(f"Testing of failed as {ex}")
@@ -85,13 +114,12 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
             test_len += len(target)
 
     if len(reference) != 0:
-        for i, batch in enumerate(sploss_list):
-            for j, layer in enumerate(batch):
-                layer_loss = torch.norm(layer - reference[i][j]) ** 2 / (layer.shape[0] ** 2)
-                if i == 0:
-                    sploss.append(layer_loss)
-                else:
-                    sploss[j] += layer_loss
+        for i, layer_output in enumerate(layers_outputs):
+            for key in layer_output.keys():
+                if key not in sploss.keys():
+                    sploss[key] = 0
+                sploss[key] += torch.norm(layer_output[key] - reference[i][key]) ** 2 / (layer_output[key].shape[0] ** 2)
+    
 
     test_len = max(test_len, 1)
     # loss function averages over batch size
@@ -109,4 +137,14 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
 
     testRes = {'top_1':correct, 'top_5':top_5, 'test_loss':sum_loss, 'sp_loss':torch.tensor(sploss), 'test_len':test_len}
 
-    return test_loss, acc, acc_5, testRes, sploss_list, sploss
+
+    # remove hooks
+    for handle in hook_handles:
+        handle.remove()
+    # transfer variables to cpu
+    for key in sploss.keys():
+        sploss[key] = sploss[key].cpu()
+    for layer_output in layers_outputs:
+        for key in layer_output.keys():
+            layer_output[key] = layer_output[key].cpu()
+    return test_loss, acc, acc_5, testRes, layers_outputs, sploss
