@@ -13,7 +13,7 @@ def layer_batch_norm(x):
     return x
 
 
-def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss(), tokenizer=None):
+def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss(), tokenizer=None, dry_run: bool=False):
     val_loss = 0
     correct = 0
     top_5 = 0
@@ -38,6 +38,8 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
                 correct += acc[0].item()
                 top_5 += acc[1].item()
             
+                if dry_run:
+                    break
             except Exception as ex:
                 logging.info(f"Validation of {clientId} failed as {ex}")
                 break
@@ -58,9 +60,13 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
     
     valRes = {'top_1':correct, 'top_5':top_5, 'val_loss':sum_loss, 'val_len': val_len}
 
+    # exhaust dataloader
+    if dry_run:
+        for data, target in val_data:
+            continue
     return val_loss, acc, acc_5, valRes
 
-def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), reference=[], layers_names=[]):
+def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), reference=[], layers_names=[], dry_run: bool=False):
 
     test_loss = 0
     correct = 0
@@ -94,7 +100,7 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
             try:
                 data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
-                output= model(data, False)
+                output = model(data, False)
                 loss = criterion(output, target)
                 
                 test_loss += loss.data.item()  # Variable.data
@@ -107,6 +113,9 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
                 for key in layer_output.keys():
                     layer_output[key] = layer_batch_norm(layer_output[key])
                 layers_outputs.append(layer_output)
+
+                if dry_run:
+                    break
         
             except Exception as ex:
                 logging.info(f"Testing of failed as {ex}")
@@ -147,4 +156,9 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
     for layer_output in layers_outputs:
         for key in layer_output.keys():
             layer_output[key] = layer_output[key].cpu()
+
+    # exhaust dataloader
+    for data, target in test_data:
+        continue
+
     return test_loss, acc, acc_5, testRes, layers_outputs, sploss

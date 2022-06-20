@@ -180,6 +180,12 @@ parser.add_argument('--noise-max', default=0.5,
 parser.add_argument('--no-bidirectional', dest='bidirectional', action='store_false', default=True,
                     help='Turn off bi-directional RNNs, introduces lookahead convolution')
 
+
+# for debug
+parser.add_argument('--dry_train', type=bool, default=False, help='False if run the real train function')
+parser.add_argument('--dry_test', type=bool, default=False, help='False if run the real test function')
+parser.add_argument('--dry_validate', type=bool, default=False, help='False if run the real validate function')
+
 args, unknown = parser.parse_known_args()
 args.use_cuda = eval(args.use_cuda)
 

@@ -3,7 +3,7 @@ from torch.autograd import Variable
 from fedscale.core.client import Client
 from fedscale.core.utils.nlp import mask_tokens
 class Customized_Client(Client):
-    def train(self, client_data, model, conf):
+    def train(self, client_data, model, conf, dry_run: bool=False):
         clientId = conf.clientId
         logging.info(f"Start to train (CLIENT: {clientId}) ...")
         tokenizer, device = conf.tokenizer, conf.device
@@ -163,6 +163,8 @@ class Customized_Client(Client):
 
                     completed_steps += 1
 
+                    if dry_run:
+                        break
 
                     if completed_steps == conf.local_steps:
                         break
@@ -184,4 +186,7 @@ class Customized_Client(Client):
 
         results['update_weight'] = model_param
         results['wall_duration'] = 0
+        if dry_run:
+            for data_pair in client_data:
+                continue
         return results, model

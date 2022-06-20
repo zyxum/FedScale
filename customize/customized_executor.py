@@ -58,7 +58,7 @@ class Customized_Executor(Executor):
         # not support rl or nlp tasks
         client_data = select_dataset(clientId, self.val_sets, batch_size=self.args.batch_size // 5, args=self.args, isTest=False, collate_fn=self.collate_fn)
         criterion = torch.nn.CrossEntropyLoss().to(device=self.device)
-        val_res = validate_model(clientId, model, client_data, self.device, criterion=criterion)
+        val_res = validate_model(clientId, model, client_data, self.device, criterion=criterion, dry_run=args.dry_validate)
         
         val_loss, acc, acc_5, valResults = val_res
         logging.info("At training round {}, client {} ({} labels) has val_loss {}, val_accuracy {:.2f}%, val_5_accuracy {:.2f}% \n"\
@@ -91,7 +91,7 @@ class Customized_Executor(Executor):
             client_data = select_dataset(clientId, self.training_sets, batch_size=conf.batch_size, args = self.args, collate_fn=self.collate_fn)
 
             client = self.get_client_trainer(conf)
-            train_res, model = client.train(client_data=client_data, model=client_model, conf=conf)
+            train_res, model = client.train(client_data=client_data, model=client_model, conf=conf, dry_run=args.dry_train)
 
         return train_res, model
 
@@ -106,13 +106,13 @@ class Customized_Executor(Executor):
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
 
         if len(self.klayers_outputs) != self.sploss_gap:
-            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion)
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, dry_run=args.dry_test)
             test_loss, acc, acc_5, testResults, layers_outputs, _ = test_res
             self.klayers_outputs.append(layers_outputs)
             logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
                         .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
-            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.ksploss[0])
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.ksploss[0], dry_run=args.dry_test)
             test_loss, acc, acc_5, testResults, layers_outputs, sploss = test_res
             self.klayers_outputs.append(layers_outputs)
             self.klayers_outputs.pop(0)
