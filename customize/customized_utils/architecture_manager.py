@@ -1,9 +1,11 @@
+from copy import deepcopy
+import logging
 import random
 import torch
 import onnx
 import collections
 import networkx as nx
-from net2net import get_model_layer, widen_conv, set_model_layer
+from customized_utils.net2net import get_model_layer, widen_conv, set_model_layer
 
 def flatten(outputs):
     new_output = []
@@ -13,6 +15,9 @@ def flatten(outputs):
         else:
             new_output.append(outputs[i])
     return new_output
+
+def sort_by_second(l: list):
+    return l[1]
 
 class Architecture_Manager(object):
     def __init__(self, dummy_input, model_path) -> None:
@@ -110,7 +115,7 @@ class Architecture_Manager(object):
         outputs = self.query_trainable_desc_helper(node_id)
         return [self.id2trainable_name[out] for out in outputs]
 
-    def widen(self, torch_model, layer_name, ratio: float=2, noise_factor: float=5e-2):
+    def widen_helper(self, torch_model, layer_name, ratio: float=2, noise_factor: float=5e-2):
         if layer_name == 'fc':
             raise Exception("not support widen fc layer")
         parent_id = self.trainable_layer_name2node_id(layer_name)
@@ -187,4 +192,19 @@ class Architecture_Manager(object):
             set_model_layer(torch_model, new_child_conv_layer, child_conv_layer_name)
         for child_bn_layer_name, new_child_bn_layer in zip(children_bns, new_children_bn_layers):
             set_model_layer(torch_model, new_child_bn_layer, child_bn_layer_name)
+        return torch_model
+
+    def widen(self, sploss: dict, torch_model):
+        # get top-5 layers based on sploss
+        model = deepcopy(torch_model)
+        sortable_sploss = [[layer, sploss[layer]] for layer in sploss.keys()]
+        sortable_sploss.sort(key=sort_by_second)
+        widen_layers = [sploss[0] for sploss in sortable_sploss[-5:]]
+        logging.info(f"widening layers {widen_layers} ...")
+        for layer in widen_layers:
+            try:
+                model = self.widen_helper(model, layer, 2)
+                assert(model != torch_model)
+            except Exception as e:
+                logging.info(f"widen {layer} fail as {e}")
         return torch_model

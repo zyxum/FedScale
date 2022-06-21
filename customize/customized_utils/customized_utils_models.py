@@ -2,7 +2,8 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch, logging
 import torch.nn.functional as F
-from net2net import get_model_layer
+import logging
+from customized_utils.net2net import get_model_layer
 
 from fedscale.core.utils.utils_model import accuracy
 
@@ -24,7 +25,6 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
     
     # only support image classification tasks
     with torch.no_grad():
-        logging.info(f"val: {len(val_data)}")
         for data, target in val_data:
             try:
                 data, target = Variable(data).to(device=device), Variable(target).to(device=device)
@@ -58,7 +58,7 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
     logging.info('Client {}: Validation set: Average loss: {}, Top-1 Accuracy: {}/{} ({}), Top-5 Accuracy: {}'
           .format(clientId, val_loss, correct, len(val_data.dataset), acc, acc_5))
     
-    valRes = {'top_1':correct, 'top_5':top_5, 'val_loss':sum_loss, 'val_len': val_len}
+    valRes = {'top_1':correct, 'top_5':top_5, 'val_loss':val_loss, 'val_len': val_len}
 
     # exhaust dataloader
     if dry_run:
@@ -66,7 +66,7 @@ def validate_model(clientId, model, val_data, device='cpu', criterion=nn.NLLLoss
             continue
     return val_loss, acc, acc_5, valRes
 
-def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), reference=[], layers_names=[], dry_run: bool=False):
+def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), reference=[], dry_run: bool=False, layers_names=[]):
 
     test_loss = 0
     correct = 0
@@ -84,7 +84,7 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
     
     def get_activation(name):
         def hook(model, input, output):
-            layer_output[name] = output.detach()
+            layer_output[name] = output.detach().cpu()
         return hook
 
     # register hooks
@@ -94,13 +94,13 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
             layer.register_forward_hook(get_activation(layer_name))
         )
 
-    logging.info(len(test_data))
+    # count = 0 # only for debug
     with torch.no_grad():
         for data, target in test_data:
             try:
                 data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
-                output = model(data, False)
+                output = model(data)
                 loss = criterion(output, target)
                 
                 test_loss += loss.data.item()  # Variable.data
@@ -116,11 +116,15 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
 
                 if dry_run:
                     break
-        
+                    
             except Exception as ex:
                 logging.info(f"Testing of failed as {ex}")
                 break
             test_len += len(target)
+            # only for debug
+            # count += 1
+            # if count > 5:
+            #     break
 
     if len(reference) != 0:
         for i, layer_output in enumerate(layers_outputs):
@@ -144,21 +148,16 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
     logging.info('Rank {}: Test set: Average loss: {}, Top-1 Accuracy: {}/{} ({}), Top-5 Accuracy: {}'
           .format(rank, test_loss, correct, len(test_data.dataset), acc, acc_5))
 
-    testRes = {'top_1':correct, 'top_5':top_5, 'test_loss':sum_loss, 'sp_loss':torch.tensor(sploss), 'test_len':test_len}
-
+    testRes = {'top_1':correct, 'top_5':top_5, 'test_loss':sum_loss, 'sp_loss':sploss, 'test_len':test_len}
 
     # remove hooks
     for handle in hook_handles:
         handle.remove()
-    # transfer variables to cpu
-    for key in sploss.keys():
-        sploss[key] = sploss[key].cpu()
-    for layer_output in layers_outputs:
-        for key in layer_output.keys():
-            layer_output[key] = layer_output[key].cpu()
 
     # exhaust dataloader
-    for data, target in test_data:
-        continue
+    if dry_run:
+        for data, target in test_data:
+            continue
 
+    logging.info("finish testing")
     return test_loss, acc, acc_5, testRes, layers_outputs, sploss

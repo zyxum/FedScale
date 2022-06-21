@@ -7,29 +7,32 @@ from fedscale.core.executor import Executor
 from fedscale.core.rlclient import RLClient
 from fedscale.core import events
 import fedscale.core.job_api_pb2 as job_api_pb2
+from fedscale.core.fllibs import init_model
 
+from customized_utils.architecture_manager import Architecture_Manager
 from customized_arg_parser import args
 from customized_fllib import init_dataset
 from customized_utils.customized_utils_models import validate_model, test_model
 from customized_client import Customized_Client
 from customized_utils.customized_divide_data import Customized_DataPartitioner, select_dataset
-from customized_init_model import customized_init_model
 from config import cfg
+
 class Customized_Executor(Executor):
     def __init__(self, args):
         super().__init__(args)
         self.klayers_outputs = []
         self.sploss_gap = cfg['sploss_gap']
 
-    def init_model(self):
-        return customized_init_model()
 
     def run(self):
         self.setup_env()
-        self.model = self.init_model()
+        self.model = init_model()
         self.model = self.model.to(device=self.device)
         self.training_sets, self.testing_sets, self.val_sets = self.init_data()
         self.setup_communication()
+        dummy_input = torch.randn(10, 3, 32, 32, device=self.device)
+        self.archi_manager = Architecture_Manager(dummy_input, 'customize_clients.onnx')
+        self.archi_manager.parse_model(self.model)
         self.event_monitor()
     
     def init_data(self):
@@ -95,30 +98,52 @@ class Customized_Executor(Executor):
 
         return train_res, model
 
-    def testing_handler(self, args):
+    def Test(self, config):
+        """Model Testing. By default, we test the accuracy on all data of clients in the test group"""
+
+        test_res = self.testing_handler(self.args, config['model'])
+        test_res = {'executorId': self.this_rank, 'results': test_res}
+
+        # Report execution completion information
+        response = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION(
+            job_api_pb2.CompleteRequest(
+                client_id = self.executor_id, executor_id = self.executor_id,
+                event = events.MODEL_TEST, status = True, msg = None,
+                meta_result = None, data_result = self.serialize_response(test_res)
+            )
+        )
+        self.dispatch_worker_events(response)
+
+    def testing_handler(self, args, models):
         """Test model"""
         evalStart = time.time()
         device = self.device
-        model = self.load_global_model()
 
         data_loader = select_dataset(self.this_rank, self.testing_sets, batch_size=args.test_bsz, args = self.args, isTest=True, collate_fn=self.collate_fn)
 
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
 
-        if len(self.klayers_outputs) != self.sploss_gap:
+        for i, model in enumerate(models[:-1]):
             test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, dry_run=args.dry_test)
+            test_loss, acc, acc_5, testResults, _, _ = test_res
+            logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
+                        .format(i, self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
+
+
+        if len(self.klayers_outputs) != self.sploss_gap:
+            logging.info(f"sploss gap: {self.sploss_gap}, current length: {len(self.klayers_outputs)}")
+            test_res = test_model(self.this_rank, models[-1], data_loader, device=device, criterion=criterion, dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, _ = test_res
             self.klayers_outputs.append(layers_outputs)
-            logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
+            logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
+                        .format(len(models), self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
-            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.ksploss[0], dry_run=args.dry_test)
+            test_res = test_model(self.this_rank, models[-1], data_loader, device=device, criterion=criterion, reference=self.klayers_outputs[0], dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, sploss = test_res
             self.klayers_outputs.append(layers_outputs)
             self.klayers_outputs.pop(0)
-            logging.info("After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
-
+            logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
+                        .format(len(models), self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
         gc.collect()
 
         return testResults 
