@@ -215,7 +215,7 @@ class Customized_Aggregator(Aggregator):
         for clientId in self.round_stragglers:
             self.client_manager.registerScore(clientId, avgUtilLastround,
                     time_stamp=self.round,
-                    duration=self.virtual_client_clock['computation']+self.virtual_client_clock[clientId]['communication'],
+                    duration=self.virtual_client_clock[clientId]['computation']+self.virtual_client_clock[clientId]['communication'],
                     success=False)
         
         avg_loss = sum(self.loss_accumulator)/max(1, len(self.loss_accumulator))
