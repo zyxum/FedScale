@@ -50,3 +50,6 @@ job_conf:
     - learning_rate: 0.05
     - batch_size: 5
     - test_bsz: 20
+    - dry_train: False
+    - dry_test: False
+    - dry_validate: False
