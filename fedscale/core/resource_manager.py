@@ -12,8 +12,10 @@ class ResourceManager(object):
         self.update_lock = threading.Lock()
     
     def register_tasks(self, clientsToRun):
+        self.update_lock.acquire()
         self.client_run_queue = clientsToRun.copy()
         self.client_run_queue_idx = 0
+        self.update_lock.release()
 
     def remove_client_task(self, client_id):
         assert(client_id in self.client_run_queue, 
