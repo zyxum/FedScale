@@ -1,12 +1,12 @@
 from fedscale.core.arg_parser import args
-from fedscale.core.utils.utils_data import get_data_transform
+from fedscale.dataloaders.utils_data import get_data_transform
 from torchvision import datasets
 import torch
 def init_dataset():
     # not support detection task or rl
     # only openimg dataset
     if args.data_set == 'openImg':
-        from fedscale.core.utils.openimage import OpenImage
+        from fedscale.dataloaders.openimage import OpenImage
 
         train_transform, test_transform = get_data_transform('openImg')
         train_dataset = OpenImage(args.data_dir, dataset='train', transform=train_transform)
