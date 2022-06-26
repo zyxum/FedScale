@@ -34,3 +34,5 @@ dependencies:
     - sentencepiece
     - gdown
     - h5py
+    - onnx
+    - networkx
