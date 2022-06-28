@@ -1,4 +1,5 @@
 import collections, logging, math, os, sys, pickle, threading, time, random
+from copy import deepcopy
 import numpy as np
 import grpc
 from concurrent import futures
@@ -10,14 +11,15 @@ from fedscale.core import events
 from fedscale.core.fl_aggregator_libs import logDir
 from fedscale.core.aggregator import Aggregator
 from fedscale.core.fllibs import init_model
-from fedscale.core.resource_manager import ResourceManager
-from fedscale.core.client_manager import clientManager
 from fedscale.core.optimizer import ServerOptimizer
 import fedscale.core.job_api_pb2_grpc as job_api_pb2_grpc
+from fedscale.core import job_api_pb2
+
 
 from customized_arg_parser import args
-from customized_utils.cluster_manager import Cluster_Manager
+from customized_resource_manager import Customized_ResourceManager
 from customized_utils.architecture_manager import Architecture_Manager
+from customized_client_manager import customized_clientManager
 
 MAX_MESSAGE_LENGTH = 1*1024*1024*1024 # 1GB
 
@@ -32,9 +34,7 @@ class Customized_Aggregator(Aggregator):
 
         # ======== env information ========
         self.this_rank = 0
-        self.global_virtual_clock = 0.
-        self.round_duration = 0.
-        self.resource_manager = ResourceManager(self.experiment_mode)
+        self.resource_manager = Customized_ResourceManager(self.experiment_mode)
         self.client_manager = self.init_client_manager(args=args)
 
         # ======== model and data ========
@@ -42,7 +42,7 @@ class Customized_Aggregator(Aggregator):
         self.model_in_update = 0
         self.update_lock = threading.Lock()
         self.model_weights = collections.OrderedDict() # all weights including bias/#_batch_tracked (e.g., state_dict)
-        self.last_gradient_weights = [] # only gradient variables
+        self.last_gradient_weights = [[]] # only gradient variables
         self.model_state_dict = None
         # NOTE: if <param_name, param_tensor> (e.g., model.parameters() in PyTorch), then False
         # True, if <param_name, list_param_tensors> (e.g., layer.get_weights() in Tensorflow)
@@ -69,7 +69,7 @@ class Customized_Aggregator(Aggregator):
         self.sampled_participants = []
         self.sampled_executors = []
 
-        self.round_stragglers = []
+        self.round_stragglers = [[]]
         self.model_update_size = 0.
 
         self.collate_fn = None
@@ -79,27 +79,32 @@ class Customized_Aggregator(Aggregator):
         self.start_run_time = time.time()
         self.client_conf = {}
 
-        self.stats_util_accumulator = []
-        self.loss_accumulator = []
-        self.client_training_results = []
+        self.stats_util_accumulator = [[]]
+        self.loss_accumulator = [[]]
+        # self.client_training_results = []
 
         # number of registered executors
         self.registered_executor_info = set()
-        self.test_result_accumulator = []
-        self.testing_history = {'data_set': args.data_set, 'model': args.model, 'sample_mode': args.sample_mode,
-                        'gradient_policy': args.gradient_policy, 'task': args.task, 'perf': collections.OrderedDict()}
+        self.test_result_accumulator = [[]]
+        self.testing_history = [{'data_set': args.data_set, 'model': args.model, 'sample_mode': args.sample_mode,
+                        'gradient_policy': args.gradient_policy, 'task': args.task, 'perf': collections.OrderedDict()}]
 
         self.log_writer = SummaryWriter(log_dir=logDir)
 
         # ======== Task specific ============
         self.init_task_context()
 
-        self.client_loss_in_update = {}
+        # ======== Cluster specific =========
+        self.cluster_virtual_clocks = [0.]
+        self.cluster_round_duration = [0.]
+        self.client_val_loss_in_update = [{}]
+        self.client_train_loss_in_update = [{}]
         self.model_in_update = [0]
-        self.global_virtual_clock = [0.]
         self.round_duration = [0.]
-        self.round = 0
-        self.cluster_manager = Cluster_Manager()
+        self.round = [0]
+        self.cluster_worker = [args.total_worker]
+        self.tasks_cluster = []
+        # self.cluster_manager = Cluster_Manager()
 
 
     def setup_env(self):
@@ -173,7 +178,7 @@ class Customized_Aggregator(Aggregator):
         """
 
         # sample_mode: random or oort
-        client_manager = clientManager(args.sample_mode, args=args)
+        client_manager = customized_clientManager(args.sample_mode, args=args)
 
         return client_manager
 
@@ -199,7 +204,6 @@ class Customized_Aggregator(Aggregator):
             systemProfile = self.client_profiles.get(mapped_id, {'computation': 1.0, 'communication':1.0})
 
             clientId = (self.num_of_clients+1) if self.experiment_mode == events.SIMULATION_MODE else executorId
-            self.cluster_manager.register_client(clientId)
             self.client_manager.registerClient(executorId, clientId, size=_size, speed=systemProfile)
             self.client_manager.registerDuration(clientId, batch_size=self.args.batch_size,
                 upload_step=self.args.local_steps, upload_size=self.model_update_size, download_size=self.model_update_size)
@@ -220,6 +224,7 @@ class Customized_Aggregator(Aggregator):
             if len(self.registered_executor_info) == len(self.executors):
                 self.client_register_handler(executorId, info)
                 # start to sample clients
+                logging.info(f"init by running round completion handler")
                 self.round_completion_handler()
         else:
             # In real deployments, we need to register for each client
@@ -238,14 +243,14 @@ class Customized_Aggregator(Aggregator):
             # 1. remove dummy clients that are not available to the end of training
             for client_to_run in sampled_clients:
                 client_cfg = self.client_conf.get(client_to_run, self.args)
-
+                cluster_id = self.client_manager.query_cluster_id(client_to_run)
                 exe_cost = self.client_manager.getCompletionTime(client_to_run,
                                         batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps,
                                         upload_size=self.model_update_size, download_size=self.model_update_size)
 
                 roundDuration = exe_cost['computation'] + exe_cost['communication']
                 # if the client is not active by the time of collection, we consider it is lost in this round
-                if self.client_manager.isClientActive(client_to_run, roundDuration + self.global_virtual_clock[-1]):
+                if self.client_manager.isClientActive(client_to_run, roundDuration + self.cluster_virtual_clocks[cluster_id]):
                     sampledClientsReal.append(client_to_run)
                     completionTimes.append(roundDuration)
                     completed_client_clock[client_to_run] = exe_cost
@@ -259,6 +264,8 @@ class Customized_Aggregator(Aggregator):
             dummy_clients = [sampledClientsReal[k] for k in sortedWorkersByCompletion[num_clients_to_collect:]]
             round_duration = completionTimes[top_k_index[-1]]
             completionTimes.sort()
+
+            logging.info(f"after tictak: clients_to_run: {client_to_run}, dummy_clients: {dummy_clients}")
 
             return (clients_to_run, dummy_clients, 
                     completed_client_clock, round_duration, 
@@ -283,15 +290,16 @@ class Customized_Aggregator(Aggregator):
 
         dummy_input = torch.randn(10, 3, 32, 32, device=self.device)
         self.archi_manager = Architecture_Manager(dummy_input, 'customize_server.onnx')
-        self.archi_manager.parse_model(self.model[-1])
+        self.archi_manager.parse_model(self.models[-1])
 
         self.event_monitor()
 
     
-    def select_participants(self, select_num_participants, overcommitment=1.3):
+    def select_participants(self, select_num_participants, overcommitment=1.3, cluster_id=0):
         return sorted(self.client_manager.resampleClients(
             int(select_num_participants*overcommitment), 
-            cur_time=self.global_virtual_clock[-1]),
+            cluster_id,
+            cur_time=self.cluster_virtual_clocks[cluster_id]),
         )
     
     
@@ -302,17 +310,18 @@ class Customized_Aggregator(Aggregator):
         #       'trained_size': count, 'wall_duration': time_cost, 'success': is_success 'utility': utility
         #       'val_res': val_res}
 
+        # not support q-fedavg for now
 
-        if self.args.gradient_policy in ['q-fedavg']:
-            self.client_training_results.append(results)
         # Feed metrics to client sampler
-        self.stats_util_accumulator.append(results['utility'])
-        self.loss_accumulator.append(results['moving_loss'])
+        clusterId = self.client_manager.query_cluster_id(clientId)
         clientId = results['clientId']
-        clusterId = self.cluster_manager.query_cluster_id(clientId)
         client_val_res = results['val_res']
-        self.client_loss_in_update[clientId] = client_val_res['val_loss']
+        self.stats_util_accumulator[clusterId].append(results['utility'])
+        self.loss_accumulator[clusterId].append(results['moving_loss'])
+        self.client_val_loss_in_update[clusterId][clientId] = client_val_res['val_loss']
+        self.client_train_loss_in_update[clusterId][clientId] = results['moving_loss']
 
+        # this is only for oort
         self.client_manager.registerScore(results['clientId'], results['utility'],
             auxi=math.sqrt(results['moving_loss']),
             time_stamp=self.round,
@@ -352,72 +361,18 @@ class Customized_Aggregator(Aggregator):
                 self.model_weights[clusterId][p].data = (self.model_weights[clusterId][p]/float(self.tasks_cluster[clusterId])).to(dtype=d_type)
         self.update_lock.release()
 
-    
-    def aggregate_client_weights(self, results):
-        """May aggregate client updates on the fly"""
-        """
-            [FedAvg] "Communication-Efficient Learning of Deep Networks from Decentralized Data".
-            H. Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, Blaise Aguera y Arcas. AISTATS, 2017
-        """
-        # Start to take the average of updates, and we do not keep updates to save memory
-        # Importance of each update is 1/#_of_participants
-        # importance = 1./self.tasks_round
-
-        for p in results['update_weight']:
-            param_weight = results['update_weight'][p]
-            if isinstance(param_weight, list):
-                param_weight = np.asarray(param_weight, dtype=np.float32)
-            param_weight = torch.from_numpy(param_weight).to(device=self.device)
-
-            if self.model_in_update == 1:
-                self.model_weights[p].data = param_weight
-            else:
-                self.model_weights[p].data += param_weight
-
-        if self.model_in_update == self.tasks_round:
-            for p in self.model_weights:
-                d_type = self.model_weights[p].data.dtype
-
-                self.model_weights[p].data = (
-                    self.model_weights[p]/float(self.tasks_round)).to(dtype=d_type)
-
-
-    def aggregate_client_group_weights(self, results):
-        """Streaming weight aggregation. Similar to aggregate_client_weights, 
-        but each key corresponds to a group of weights (e.g., for Tensorflow)"""
-
-        for p_g in results['update_weight']:
-            param_weights = results['update_weight'][p_g]
-            for idx, param_weight in enumerate(param_weights):
-                if isinstance(param_weight, list):
-                    param_weight = np.asarray(param_weight, dtype=np.float32)
-                param_weight = torch.from_numpy(param_weight).to(device=self.device)
-
-                if self.model_in_update == 1:
-                    self.model_weights[p_g][idx].data = param_weight
-                else:
-                    self.model_weights[p_g][idx].data += param_weight
-
-        if self.model_in_update == self.tasks_round:
-            for p in self.model_weights:
-                for idx in range(len(self.model_weights[p])):
-                    d_type = self.model_weights[p][idx].data.dtype
-
-                    self.model_weights[p][idx].data = (
-                        self.model_weights[p][idx].data/float(self.tasks_round)
-                    ).to(dtype=d_type)
-
-
-    def save_last_param(self):
+    def save_last_param(self, clusterId):
         if self.args.engine == events.TENSORFLOW:
-            self.last_gradient_weights = [layer.get_weights() for layer in self.model.layers]
+            self.last_gradient_weights[clusterId] = [layer.get_weights() for layer in self.model.layers]
         else:
-            self.last_gradient_weights = [p.data.clone() for p in self.model[-1].parameters()]
+            if clusterId == len(self.last_gradient_weights):
+                self.last_gradient_weights.append([p.data.clone() for p in self.model[-1].parameters()])
+            self.last_gradient_weights[clusterId] = [p.data.clone() for p in self.model[-1].parameters()]
 
 
     def round_weight_handler(self, last_model, clusterId):
         """Update model when the round completes"""
-        if self.round > 1:
+        if self.round[clusterId] > 1:
             if self.args.engine == events.TENSORFLOW:
                 for layer in self.model.layers:
                     layer.set_weights([p.cpu().detach().numpy() for p in self.model_weights[layer.name]])
@@ -429,58 +384,48 @@ class Customized_Aggregator(Aggregator):
                 # self.optimizer.update_round_gradient(last_model, current_grad_weights, self.model)
 
 
-    def round_completion_handler(self):
-        self.round += 1
-        if self.round % self.args.decay_round == 0:
+    def round_completion_handler(self, clusterId):
+        self.round[clusterId] += 1
+        if self.round[clusterId] % self.args.decay_round == 0:
             self.args.learning_rate = max(self.args.learning_rate*self.args.decay_factor, self.args.min_learning_rate)
 
-        avgUtilLastround = sum(self.stats_util_accumulator)/max(1, len(self.stats_util_accumulator))
+        avgUtilLastround = sum(self.stats_util_accumulator[clusterId])/max(1, len(self.stats_util_accumulator[clusterId]))
 
         # assign avg reward to explored, but not ran workers
-        for clientId in self.round_stragglers:
+        for clientId in self.round_stragglers[clusterId]:
             self.client_manager.registerScore(clientId, avgUtilLastround,
-                    time_stamp=self.round,
+                    time_stamp=self.round[clusterId],
                     duration=self.virtual_client_clock[clientId]['computation']+self.virtual_client_clock[clientId]['communication'],
                     success=False)
         
-        avg_loss = sum(self.loss_accumulator)/max(1, len(self.loss_accumulator))
+        avg_loss = sum(self.loss_accumulator[clusterId])/max(1, len(self.loss_accumulator[clusterId]))
         
-        # per cluster update
-        for clusterId in self.cluster_manager.clusters.keys():
-            self.global_virtual_clock[clusterId] += self.round_duration[clusterId]
+
+        self.cluster_virtual_clocks[clusterId] += self.round_duration[clusterId]
 
             # handle the global update w/ current and last
-            self.round_weight_handler(self.last_gradient_weights, clusterId)
+        self.round_weight_handler(self.last_gradient_weights, clusterId)
 
-            logging.info(f"Cluster: {clusterId}, Wall clock: {round(self.global_virtual_clock[clusterId])} s, round: {self.round}, Planned participants: " + \
-                f"{len(self.sampled_participants)}, Succeed participants: {len(self.stats_util_accumulator)}, Training loss: {avg_loss}")
+        logging.info(f"Cluster: {clusterId}, Wall clock: {round(self.global_virtual_clock[clusterId])} s, round: {self.round[clusterId]}, Planned participants: " + \
+            f"{len(self.sampled_participants)}, Succeed participants: {len(self.stats_util_accumulator[clusterId])}, Training loss: {avg_loss}")
 
         
         # dump round completion information to tensorboard
-        if len(self.loss_accumulator):
-            self.log_train_result(avg_loss)
+        if len(self.loss_accumulator[clusterId]):
+            self.log_train_result(avg_loss, clusterId)
 
         # update select participants
+        self.cluster_worker[clusterId] = self.client_manager.get_cluster_worker()
         self.sampled_participants = self.select_participants(
-                        select_num_participants=self.args.total_worker, overcommitment=self.args.overcommitment)
+                        select_num_participants=self.cluster_worker[clusterId], overcommitment=self.args.overcommitment, cluster_id=clusterId)
         (clientsToRun, round_stragglers, virtual_client_clock, round_duration, flatten_client_duration) = self.tictak_client_tasks(
-                        self.sampled_participants, self.args.total_worker)
+                        self.sampled_participants, self.cluster_worker[clusterId])
 
-        logging.info(f"Selected participants to run: {clientsToRun}")
+        logging.info(f"Cluster: {clusterId}. Selected participants to run: {clientsToRun}")
 
         # Issue requests to the resource manager; Tasks ordered by the completion time
-        self.resource_manager.register_tasks(clientsToRun)
-        logging.info(f"registered tasks")
-        self.tasks_round = len(clientsToRun)
-
-        # create tasks per cluster
-        self.tasks_cluster = {}
-        for client_id in clientsToRun:
-            cluster_id = self.cluster_manager.query_cluster_id(int(client_id))
-            if cluster_id not in self.tasks_cluster.keys():
-                self.tasks_cluster[cluster_id] = 0
-            self.tasks_cluster[cluster_id] += 1
-        logging.info(f"recorded tasks for clusters")
+        self.resource_manager.register_tasks(clientsToRun, clusterId)
+        self.tasks_cluster[clusterId] = len(clientsToRun)
 
         # Update executors and participants
         if self.experiment_mode == events.SIMULATION_MODE:
@@ -489,52 +434,64 @@ class Customized_Aggregator(Aggregator):
             self.sampled_executors = [str(c_id) for c_id in self.sampled_participants]
 
         # record validate loss to cluster manager
-        if len(self.client_loss_in_update) != 0:
-            self.need_update = self.cluster_manager.record_val_loss(self.client_loss_in_update)
-        logging.info(f"recorded validate loss")
+        if len(self.client_val_loss_in_update) != 0 and not self.need_update\
+            and clusterId == len(self.client_manager.cluster) - 1:
+            self.need_update = self.client_manager.register_loss(
+                self.client_val_loss_in_update,
+                self.client_train_loss_in_update)
+            if self.need_update:
+                # prepare to split cluster
+                logging.info(f"splitting cluster")
+                self.client_manager.split_cluster()
+                self.stats_util_accumulator.append([])
+                self.loss_accumulator.append([])
+                self.test_result_accumulator.append([])
+                self.testing_history.append(deepcopy(self.testing_history[-1]))
+                self.cluster_virtual_clocks.append(deepcopy(self.cluster_virtual_clocks[-1]))
+                self.cluster_round_duration.append(0.)
+                self.client_val_loss_in_update.append({})
+                self.client_train_loss_in_update.append({})
+                self.model_in_update.append(0)
+                self.round_duration.append(0.)
+                self.round.append(deepcopy(self.round[-1]))
+                self.cluster_worker.append(0)
+                self.tasks_cluster.append(0)
 
-        self.save_last_param()
-        logging.info(f"saved last parameters")
 
-        self.round_stragglers = round_stragglers
+        self.save_last_param(clusterId)
+
+        self.round_stragglers[clusterId] = round_stragglers
         self.virtual_client_clock = virtual_client_clock
-        self.flatten_client_duration = np.array(flatten_client_duration)
-        for clusterId in self.cluster_manager.clusters.keys():
-            self.round_duration[clusterId] = round_duration
-            self.model_in_update[clusterId] = 0
-        self.test_result_accumulator = []
-        self.stats_util_accumulator = []
-        self.client_training_results = []
-        self.client_loss_in_update = {}
+        self.flatten_client_duration[clusterId] = np.array(flatten_client_duration)
+        self.round_duration[clusterId] = round_duration
+        self.model_in_update[clusterId] = 0
+        self.test_result_accumulator[clusterId] = []
+        self.stats_util_accumulator[clusterId] = []
+        # self.client_training_results = []
+        self.client_val_loss_in_update[clusterId] = {}
+        self.client_train_loss_in_update[clusterId] = {}
 
-        logging.info(f"finished round completion handler")
-
-        if self.round >= self.args.rounds:
+        if self.round[clusterId] >= self.args.rounds:
             self.broadcast_aggregator_events(events.SHUT_DOWN)
-        elif self.round % self.args.eval_interval == 0:
-            self.broadcast_aggregator_events(events.UPDATE_MODEL)
-            self.broadcast_aggregator_events(events.MODEL_TEST)
+        elif self.round[clusterId] % self.args.eval_interval == 0:
+            self.broadcast_aggregator_events(events.UPDATE_MODEL, clusterId=clusterId)
+            self.broadcast_aggregator_events(events.MODEL_TEST, clusterId=clusterId)
+        elif self.need_update and clusterId == len(self.client_manager.cluster) - 1:
+            self.broadcast_aggregator_events(events.UPDATE_MODEL, clusterId=clusterId)
+            self.broadcast_aggregator_events(events.MODEL_TEST, clusterId=clusterId)
         else:
-            self.broadcast_aggregator_events(events.UPDATE_MODEL)
-            self.broadcast_aggregator_events(events.START_ROUND)
+            self.broadcast_aggregator_events(events.UPDATE_MODEL, clusterId=clusterId)
+            self.broadcast_aggregator_events(events.START_ROUND, clusterId=clusterId)
         
         logging.info(f"finished broadcast events")
 
 
-    def log_train_result(self, avg_loss):
+    def log_train_result(self, avg_loss, clusterId):
         """Result will be post on TensorBoard"""
-        self.log_writer.add_scalar('Train/round_to_loss', avg_loss, self.round)
-        self.log_writer.add_scalar('FAR/time_to_train_loss (min)', avg_loss, self.global_virtual_clock[-1]/60.)
-        self.log_writer.add_scalar('FAR/round_duration (min)', self.round_duration[-1]/60., self.round)
-        self.log_writer.add_histogram('FAR/client_duration (min)', self.flatten_client_duration, self.round)
-
-    def log_test_result(self):
-        self.log_writer.add_scalar('Test/round_to_loss', self.testing_history['perf'][self.round]['loss'], self.round)
-        self.log_writer.add_scalar('Test/round_to_accuracy', self.testing_history['perf'][self.round]['top_1'], self.round)
-        self.log_writer.add_scalar('FAR/time_to_test_loss (min)', self.testing_history['perf'][self.round]['loss'],
-                                    self.global_virtual_clock[-1]/60.)
-        self.log_writer.add_scalar('FAR/time_to_test_accuracy (min)', self.testing_history['perf'][self.round]['top_1'],
-                                    self.global_virtual_clock[-1]/60.)
+        self.log_writer.add_scalar('Train/round_to_loss_' + str(clusterId), avg_loss, self.round[clusterId])
+        self.log_writer.add_scalar('FAR/time_to_train_loss_' + str(clusterId) + ' (min)', avg_loss, self.cluster_virtual_clocks[clusterId][-1]/60.)
+        self.log_writer.add_scalar('FAR/round_duration_' + str(clusterId) + ' (min)', self.round_duration[clusterId][-1]/60., self.round[clusterId])
+        self.log_writer.add_histogram('FAR/client_duration_' + str(clusterId) + ' (min)', self.flatten_client_duration[clusterId], self.round[clusterId])
 
 
     def testing_completion_handler(self, client_id, results):
@@ -542,36 +499,38 @@ class Customized_Aggregator(Aggregator):
 
         results = results['results']
 
+        clusterId = results['model_id']
+
         # List append is thread-safe
-        self.test_result_accumulator.append(results)
+        self.test_result_accumulator[clusterId].append(results)
 
         # Have collected all testing results
-        if len(self.test_result_accumulator) == len(self.executors):
-            accumulator = self.test_result_accumulator[0]
-            for i in range(1, len(self.test_result_accumulator)):
+        if len(self.test_result_accumulator[clusterId]) == len(self.executors):
+            accumulator = self.test_result_accumulator[clusterId][0]
+            for i in range(1, len(self.test_result_accumulator[clusterId])):
                 if self.args.task == "detection":
                     for key in accumulator:
                         if key == "boxes":
                             for j in range(self.imdb.num_classes):
-                                accumulator[key][j] = accumulator[key][j] + self.test_result_accumulator[i][key][j]
+                                accumulator[key][j] = accumulator[key][j] + self.test_result_accumulator[clusterId][i][key][j]
                         else:
-                            accumulator[key] += self.test_result_accumulator[i][key]
+                            accumulator[key] += self.test_result_accumulator[clusterId][i][key]
                 else:
                     for key in accumulator:
                         if isinstance(accumulator[key], dict):
                             for subkey in accumulator[key].keys():
-                                accumulator[key][subkey] += self.test_result_accumulator[i][key][subkey]
+                                accumulator[key][subkey] += self.test_result_accumulator[clusterId][i][key][subkey]
                         else:
-                            accumulator[key] += self.test_result_accumulator[i][key]
+                            accumulator[key] += self.test_result_accumulator[clusterId][i][key]
             if self.args.task == "detection":
-                self.testing_history['perf'][self.round] = {'round': self.round, 'clock': self.global_virtual_clock[-1],
-                    'top_1': round(accumulator['top_1']*100.0/len(self.test_result_accumulator), 4),
-                    'top_5': round(accumulator['top_5']*100.0/len(self.test_result_accumulator), 4),
+                self.testing_history[clusterId]['perf'][self.round] = {'round': self.round, 'clock': self.global_virtual_clock[-1],
+                    'top_1': round(accumulator['top_1']*100.0/len(self.test_result_accumulator[clusterId]), 4),
+                    'top_5': round(accumulator['top_5']*100.0/len(self.test_result_accumulator[clusterId]), 4),
                     'loss': accumulator['test_loss'],
                     'test_len': accumulator['test_len']
                 }
             else:
-                self.testing_history['perf'][self.round] = {'round': self.round, 'clock': self.global_virtual_clock[-1],
+                self.testing_history[clusterId]['perf'][self.round] = {'round': self.round, 'clock': self.global_virtual_clock[-1],
                     'top_1': round(accumulator['top_1']/accumulator['test_len']*100.0, 4),
                     'top_5': round(accumulator['top_5']/accumulator['test_len']*100.0, 4),
                     'loss': accumulator['test_loss']/accumulator['test_len'],
@@ -580,40 +539,46 @@ class Customized_Aggregator(Aggregator):
                 }
 
 
-            logging.info("FL Testing in epoch: {}, virtual_clock: {}, top_1: {} %, top_5: {} %, sploss: {}, test loss: {:.4f}, test len: {}"
-                    .format(self.round, self.global_virtual_clock[-1], self.testing_history['perf'][self.round]['top_1'],
-                    self.testing_history['perf'][self.round]['top_5'], self.testing_history['perf'][self.round]['sp_loss'],self.testing_history['perf'][self.round]['loss'],
-                    self.testing_history['perf'][self.round]['test_len']))
+            logging.info("Cluster: {}. FL Testing in epoch: {}, virtual_clock: {}, top_1: {} %, top_5: {} %, sploss: {}, test loss: {:.4f}, test len: {}"
+                    .format(clusterId, self.round[clusterId], self.cluster_virtual_clocks[clusterId][-1], self.testing_history[clusterId]['perf'][self.round]['top_1'],
+                    self.testing_history[clusterId]['perf'][self.round]['top_5'], self.testing_history[clusterId]['perf'][self.round]['sp_loss'],self.testing_history[clusterId]['perf'][self.round]['loss'],
+                    self.testing_history[clusterId]['perf'][self.round]['test_len']))
 
             # Dump the testing result
-            with open(os.path.join(logDir, 'testing_perf'), 'wb') as fout:
-                pickle.dump(self.testing_history, fout)
+            with open(os.path.join(logDir, 'testing_perf_' + str(clusterId)), 'wb') as fout:
+                pickle.dump(self.testing_history[clusterId], fout)
 
-            if len(self.loss_accumulator):
-                self.log_writer.add_scalar('Test/round_to_loss', self.testing_history['perf'][self.round]['loss'], self.round)
-                self.log_writer.add_scalar('Test/round_to_accuracy', self.testing_history['perf'][self.round]['top_1'], self.round)
-                self.log_writer.add_scalar('FAR/time_to_test_loss (min)', self.testing_history['perf'][self.round]['loss'],
-                                            self.global_virtual_clock[-1]/60.)
-                self.log_writer.add_scalar('FAR/time_to_test_accuracy (min)', self.testing_history['perf'][self.round]['top_1'],
-                                            self.global_virtual_clock[-1]/60.)
-                self.log_writer.add_scalars('Test/sp_loss', self.testing_history['perf'][self.round]['sp_loss'], self.round)
+            if len(self.loss_accumulator[clusterId]):
+                self.log_writer.add_scalar('Test/round_to_loss_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round]['loss'], self.round[clusterId])
+                self.log_writer.add_scalar('Test/round_to_accuracy_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round]['top_1'], self.round[clusterId])
+                self.log_writer.add_scalar('FAR/time_to_test_loss_' + str(clusterId) + ' (min)', self.testing_history[clusterId]['perf'][self.round]['loss'],
+                                            self.cluster_virtual_clocks[clusterId][-1]/60.)
+                self.log_writer.add_scalar('FAR/time_to_test_accuracy_' + str(clusterId) + ' (min)', self.testing_history[clusterId]['perf'][self.round]['top_1'],
+                                            self.cluster_virtual_clocks[clusterId][-1]/60.)
+                self.log_writer.add_scalars('Test/sp_loss_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round]['sp_loss'], self.round[clusterId])
 
             # widen layer on demand
             if self.need_update:
-                model = self.archi_manager.widen(self.testing_history['perf'][self.round]['sp_loss'], self.model[-1])
-                self.model.append(model)
+                model = self.archi_manager.widen(self.testing_history[clusterId]['perf'][self.round]['sp_loss'], self.model[-1])
+                self.models.append(model)
                 self.need_update = False
+                self.round_completion_handler(len(self.models) - 1)
 
-            self.broadcast_events_queue.append(events.START_ROUND)
+
+            self.broadcast_events_queue.append((events.START_ROUND, clusterId))
+
+    def broadcast_aggregator_events(self, event, clusterId=-1):
+        """Issue tasks (events) to aggregator worker processes"""
+        self.broadcast_events_queue.append((event, clusterId))
 
 
-    def dispatch_client_events(self, event, clients=None):
+    def dispatch_client_events(self, event, clusterId=-1, clients=None):
         """Issue tasks (events) to clients"""
         if clients is None:
             clients = self.sampled_executors
 
         for client_id in clients:
-            self.individual_client_events[client_id].append(event)
+            self.individual_client_events[client_id].append((event, clusterId))
 
     
     def get_client_conf(self, clientId):
@@ -626,7 +591,7 @@ class Customized_Aggregator(Aggregator):
         return conf
 
 
-    def create_client_task(self, executorId):
+    def create_client_task(self, executorId, clusterId):
         """Issue a new client training task to the executor"""
 
         next_clientId = self.resource_manager.get_next_task(executorId)
@@ -635,19 +600,18 @@ class Customized_Aggregator(Aggregator):
         model = None
         if next_clientId != None:
             config = self.get_client_conf(next_clientId)
-            train_config = {'client_id': next_clientId, 'task_config': config}
+            train_config = {'client_id': next_clientId, 'task_config': config, 'model_id': clusterId}
         return train_config, model
 
 
-    def get_test_config(self, client_id):
+    def get_test_config(self, clusterId):
         """FL model testing on clients"""
 
-        return {'models': self.models}
+        return {'model_id': clusterId}
 
-
-    def get_global_model(self):
+    def get_global_model(self, clusterId=-1):
         """Get global model that would be used by all FL clients (in default FL)"""
-        return self.model
+        return self.models[clusterId]
 
 
     def CLIENT_REGISTER(self, request, context):
@@ -684,17 +648,18 @@ class Customized_Aggregator(Aggregator):
             current_event = events.DUMMY_EVENT
             response_data = response_msg = events.DUMMY_RESPONSE
         else:
-            current_event = self.individual_client_events[executor_id].popleft()
+            current_event, current_clusterId = self.individual_client_events[executor_id].popleft()
             if current_event == events.CLIENT_TRAIN:
-                response_msg, response_data = self.create_client_task(client_id)
+                response_msg, response_data = self.create_client_task(client_id, current_clusterId)
                 if response_msg is None:
                     current_event = events.DUMMY_EVENT
                     if self.experiment_mode != events.SIMULATION_MODE:
-                        self.individual_client_events[executor_id].appendleft(events.CLIENT_TRAIN)
+                        self.individual_client_events[executor_id].appendleft((events.CLIENT_TRAIN, current_clusterId))
             elif current_event == events.MODEL_TEST:
-                response_msg = self.get_test_config(client_id)
+                response_msg = self.get_test_config(current_clusterId)
             elif current_event == events.UPDATE_MODEL:
-                response_data = self.get_global_model()
+                response_data = self.get_global_model(current_clusterId)
+                response_msg = current_clusterId
             elif current_event == events.SHUT_DOWN:
                 response_msg = self.get_shutdown_config(executor_id)
 
@@ -713,6 +678,8 @@ class Customized_Aggregator(Aggregator):
         execution_status, execution_msg = request.status, request.msg
         meta_result, data_result = request.meta_result, request.data_result
 
+        clusterId = self.client_manager.query_cluster_id(client_id)
+
         if event == events.CLIENT_TRAIN:
             # Training results may be uploaded in CLIENT_EXECUTE_RESULT request later,
             # so we need to specify whether to ask client to do so (in case of straggler/timeout in real FL).
@@ -721,7 +688,7 @@ class Customized_Aggregator(Aggregator):
             if self.resource_manager.has_next_task(executor_id):
                 # NOTE: we do not pop the train immediately in simulation mode,
                 # since the executor may run multiple clients
-                self.individual_client_events[executor_id].appendleft(events.CLIENT_TRAIN)
+                self.individual_client_events[executor_id].appendleft((events.CLIENT_TRAIN, clusterId))
 
         elif event in (events.MODEL_TEST, events.UPLOAD_MODEL):
             self.add_event_handler(executor_id, event, meta_result, data_result)
@@ -736,13 +703,13 @@ class Customized_Aggregator(Aggregator):
         while True:
             # Broadcast events to clients
             if len(self.broadcast_events_queue) > 0:
-                current_event = self.broadcast_events_queue.popleft()
+                current_event, current_cluster = self.broadcast_events_queue.popleft()
 
                 if current_event in (events.UPDATE_MODEL, events.MODEL_TEST):
-                    self.dispatch_client_events(current_event)
+                    self.dispatch_client_events(current_event, clusterId=current_cluster)
 
                 elif current_event == events.START_ROUND:
-                    self.dispatch_client_events(events.CLIENT_TRAIN)
+                    self.dispatch_client_events(events.CLIENT_TRAIN, clusterId=current_cluster)
 
                 elif current_event == events.SHUT_DOWN:
                     self.dispatch_client_events(events.SHUT_DOWN)
@@ -751,11 +718,11 @@ class Customized_Aggregator(Aggregator):
             # Handle events queued on the aggregator
             elif len(self.sever_events_queue) > 0:
                 client_id, current_event, meta, data = self.sever_events_queue.popleft()
-
+                clusterId = self.client_manager.query_cluster_id(client_id)
                 if current_event == events.UPLOAD_MODEL:
                     self.client_completion_handler(self.deserialize_response(data))
-                    if len(self.stats_util_accumulator) == self.tasks_round:
-                            self.round_completion_handler()
+                    if len(self.stats_util_accumulator[clusterId]) == self.tasks_cluster[clusterId]:
+                            self.round_completion_handler(clusterId)
 
                 elif current_event == events.MODEL_TEST:
                     self.testing_completion_handler(client_id, self.deserialize_response(data))

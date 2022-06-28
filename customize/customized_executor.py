@@ -1,6 +1,7 @@
 import logging, gc, time, collections, os, random, pickle
 import torch
 import numpy as np
+from argparse import Namespace
 
 
 from fedscale.core import events
@@ -37,12 +38,12 @@ class Customized_Executor(Executor):
         # ======== runtime information ========
         self.collate_fn = None
         self.task = args.task
-        self.round = 0
+        self.round = [0]
         self.start_run_time = time.time()
         self.received_stop_request = False
         self.event_queue = collections.deque()
 
-        self.klayers_outputs = []
+        self.klayers_outputs = [[]]
         self.sploss_gap = cfg['sploss_gap']
 
 
@@ -109,8 +110,8 @@ class Customized_Executor(Executor):
 
     def run(self):
         self.setup_env()
-        self.model = init_model()
-        self.model = self.model.to(device=self.device)
+        self.models = [self.init_model()]
+        self.models = [model.to(device=self.device) for model in self.models]
         self.training_sets, self.testing_sets, self.val_sets = self.init_data()
         self.setup_communication()
 
@@ -125,9 +126,9 @@ class Customized_Executor(Executor):
         self.event_queue.append(request)
 
 
-    def UpdateModel(self, config):
+    def UpdateModel(self, config, model_id):
         """Receive the broadcasted global model for current round"""
-        self.update_model_handler(model=config)
+        self.update_model_handler(config, model_id)
 
 
     def Train(self, config):
@@ -162,8 +163,8 @@ class Customized_Executor(Executor):
     def Test(self, config):
         """Model Testing. By default, we test the accuracy on all data of clients in the test group"""
 
-        test_res = self.testing_handler(self.args, config['model'])
-        test_res = {'executorId': self.this_rank, 'results': test_res}
+        test_res = self.testing_handler(self.args, config['model_id'])
+        test_res = {'executorId': self.this_rank, 'results': test_res, 'clusterId': config['model_id']}
 
         # Report execution completion information
         response = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION(
@@ -181,15 +182,19 @@ class Customized_Executor(Executor):
         return self.training_sets.getSize()
 
     
-    def update_model_handler(self, model):
+    def update_model_handler(self, model, model_id):
         """Update the model copy on this executor"""
-        self.model = model
-        self.round += 1
+        self.models[model_id] = model
+        self.round[model_id] += 1
+
+        # Dump latest model to disk
+        with open(self.temp_model_path + '_' + str(model_id), 'wb') as model_out:
+            pickle.dump(self.model, model_out)
 
 
-    def load_global_model(self):
+    def load_global_model(self, model_id):
         # load last global model
-        with open(self.temp_model_path, 'rb') as model_in:
+        with open(self.temp_model_path + '_' + str(model_id), 'rb') as model_in:
             model = pickle.load(model_in)
         return model
 
@@ -245,7 +250,7 @@ class Customized_Executor(Executor):
         return valResults
 
 
-    def testing_handler(self, args, models):
+    def testing_handler(self, args, model_id):
         """Test model"""
         evalStart = time.time()
         device = self.device
@@ -254,27 +259,22 @@ class Customized_Executor(Executor):
 
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
 
-        for i, model in enumerate(models[:-1]):
-            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, dry_run=args.dry_test)
-            test_loss, acc, acc_5, testResults, _, _ = test_res
-            logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(i, self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
-
+        model = self.models[model_id]
 
         if len(self.klayers_outputs) != self.sploss_gap:
             logging.info(f"sploss gap: {self.sploss_gap}, current length: {len(self.klayers_outputs)}")
-            test_res = test_model(self.this_rank, models[-1], data_loader, device=device, criterion=criterion, dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, _ = test_res
             self.klayers_outputs.append(layers_outputs)
             logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(len(models), self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
+                        .format(model_id, self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
-            test_res = test_model(self.this_rank, models[-1], data_loader, device=device, criterion=criterion, reference=self.klayers_outputs[0], dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.klayers_outputs[0], dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, sploss = test_res
             self.klayers_outputs.append(layers_outputs)
             self.klayers_outputs.pop(0)
             logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(len(models), self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
+                        .format(model_id, self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
         gc.collect()
 
         return testResults 
@@ -337,7 +337,8 @@ class Customized_Executor(Executor):
 
                 elif current_event == events.UPDATE_MODEL:
                     broadcast_config = self.deserialize_response(request.data)
-                    self.UpdateModel(broadcast_config)
+                    model_id = self.deserialize_response(request.meta)
+                    self.UpdateModel(broadcast_config, model_id)
 
                 elif current_event == events.SHUT_DOWN:
                     self.Stop()

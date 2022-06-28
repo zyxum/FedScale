@@ -9,6 +9,7 @@ class Cluster_Manager(object):
         self.avg_val_loss = []
 
     def register_client(self, client_id):
+        logging.info(f"try to register client {client_id}")
         if client_id not in self.clusters[0]:
             self.clusters[0].append(client_id)
     
