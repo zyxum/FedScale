@@ -3,10 +3,7 @@ import math
 from random import Random
 import pickle
 import logging
-from unittest.loader import VALID_MODULE_NAME
 
-from sklearn import cluster
-from fedscale.core.client_manager import clientManager
 import statistics
 
 from fedscale.core.helper.client import Client
@@ -39,8 +36,7 @@ class customized_clientManager(object):
         self.args = args
 
         # ==== for cluster management ====
-        self.avg_val_loss = []
-        self.cluster = defaultdict(list)
+        self.clusters = defaultdict(list)
         self.val_loss = defaultdict(list)
         self.train_loss = defaultdict(list)
         self.avg_val_loss = []
@@ -58,13 +54,14 @@ class customized_clientManager(object):
         user_trace = None if self.user_trace is None else self.user_trace[self.user_trace_keys[int(clientId)%len(self.user_trace)]]
 
         self.Clients[uniqueId] = Client(hostId, clientId, speed, user_trace)
+        assert(str(clientId) in self.Clients.keys())
 
         # remove clients
         if size >= self.filter_less and size <= self.filter_more:
             # register clients in cluster
-            assert(clientId not in self.cluster[0])
-            self.cluster[0].append(clientId)
-
+            assert(clientId not in self.clusters[0])
+            self.clusters[0].append(clientId)
+            # logging.info(f"get client {uniqueId}")
             self.feasibleClients[0].append(clientId)
             self.feasible_samples += size
 
@@ -75,6 +72,7 @@ class customized_clientManager(object):
                 self.ucbSampler.register_client(clientId, feedbacks=feedbacks)
         else:
             del self.Clients[uniqueId]
+            # logging.info(f"remove client {uniqueId}")
 
     def getAllClients(self):
         return [clients for cluster in self.feasibleClients for clients in cluster]
@@ -86,12 +84,12 @@ class customized_clientManager(object):
         return self.Clients[self.getUniqueId(0, clientId)]
 
     def registerDuration(self, clientId, batch_size, upload_step, upload_size, download_size):
-        # register duration for client selection
-        exe_cost = self.Clients[self.getUniqueId(0, clientId)].getCompletionTime(
-                batch_size=batch_size, upload_step=upload_step,
-                upload_size=upload_size, download_size=download_size
-        )
-        self.round_duration[clientId] = exe_cost['computation'] + exe_cost['communication']
+        if self.getUniqueId(0, clientId) in self.Clients:
+            exe_cost = self.Clients[self.getUniqueId(0, clientId)].getCompletionTime(
+                    batch_size=batch_size, upload_step=upload_step,
+                    upload_size=upload_size, download_size=download_size
+            )
+            self.round_duration[clientId] = exe_cost['computation'] + exe_cost['communication']
 
     def getCompletionTime(self, clientId, batch_size, upload_step, upload_size, download_size):
         
@@ -229,6 +227,8 @@ class customized_clientManager(object):
         return 0.
 
     def register_loss(self, val_loss: dict, train_loss: dict):
+        if len(val_loss) == 0:
+            return
         avg_loss = 0.0
         for client_id in val_loss.keys():
             self.val_loss[client_id].append(val_loss[client_id])
@@ -278,16 +278,18 @@ class customized_clientManager(object):
                 self.clusters[new_cluster].append(client_id)
                 self.clusters[new_cluster-1].pop(client_id)
     
-    def query_cluster_id(self, client_id):
+    def query_cluster_id(self, client_id: str):
         for cluster_id in self.clusters.keys():
-            if client_id in self.clusters[cluster_id]:
+            if str(client_id) in self.clusters[cluster_id] or\
+                int(client_id) in self.clusters[cluster_id]:
                 return cluster_id
         logging.info(f'client manager did not find client {client_id}')
+        logging.info(self.clusters)
         raise Exception
 
     def get_cluster_worker(self, clusterId, total_worker):
-        assert(clusterId in self.cluster.keys())
+        assert(clusterId in self.clusters.keys())
         # consider fairness among clusters
-        return int(total_worker * len(self.cluster[clusterId]) / self.getAllClientsLength())
+        return int(total_worker * len(self.clusters[clusterId]) / self.getAllClientsLength())
 
 

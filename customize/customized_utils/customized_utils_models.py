@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import logging
 from customized_utils.net2net import get_model_layer
 
-from fedscale.core.utils.utils_model import accuracy
+from fedscale.core.utils.model_test_module import accuracy
 
 def layer_batch_norm(x):
     x = torch.reshape(x, (x.shape[0], -1))

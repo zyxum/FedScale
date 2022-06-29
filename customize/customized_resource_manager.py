@@ -20,7 +20,7 @@ class Customized_ResourceManager(ResourceManager):
             f"client task {client_id} is not in task queue")
         pass
 
-    def has_next_task(self, clusterId, client_id=None):
+    def has_next_task(self, clusterId: int, client_id=None):
         exist_next_task = False
         if self.experiment_mode == events.SIMULATION_MODE:
             exist_next_task = self.client_run_queue_idx[clusterId] < len(self.client_run_queue[clusterId])
@@ -28,13 +28,13 @@ class Customized_ResourceManager(ResourceManager):
             exist_next_task = client_id in self.client_run_queue[clusterId]
         return exist_next_task
     
-    def get_next_task(self, clusterId, client_id=None):
+    def get_next_task(self, clusterId: int, client_id=None):
         next_task_id = None
         self.update_lock.acquire()
         if self.experiment_mode == events.SIMULATION_MODE:
-            if self.has_next_task(client_id):
+            if self.has_next_task(clusterId, client_id):
                 next_task_id = self.client_run_queue[clusterId][self.client_run_queue_idx[clusterId]]
-                self.client_run_queue_idx += 1
+                self.client_run_queue_idx[clusterId] += 1
         else:
             if client_id in self.client_run_queue[clusterId]:
                 next_task_id = client_id

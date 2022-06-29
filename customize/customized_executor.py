@@ -117,7 +117,7 @@ class Customized_Executor(Executor):
 
         dummy_input = torch.randn(10, 3, 32, 32, device=self.device)
         self.archi_manager = Architecture_Manager(dummy_input, 'customize_clients.onnx')
-        self.archi_manager.parse_model(self.model)
+        self.archi_manager.parse_model(self.models[0])
         self.event_monitor()
     
     
@@ -134,7 +134,7 @@ class Customized_Executor(Executor):
     def Train(self, config):
         """Integrate validation into training"""
         client_id, train_config = config['client_id'], config['task_config']
-
+        train_config['model_id'] = config['model_id']
         model = None
         if 'model' in train_config and train_config['model'] is not None:
             model = train_config['model']
@@ -189,13 +189,14 @@ class Customized_Executor(Executor):
 
         # Dump latest model to disk
         with open(self.temp_model_path + '_' + str(model_id), 'wb') as model_out:
-            pickle.dump(self.model, model_out)
+            pickle.dump(self.models[model_id], model_out)
 
 
     def load_global_model(self, model_id):
         # load last global model
         with open(self.temp_model_path + '_' + str(model_id), 'rb') as model_in:
             model = pickle.load(model_in)
+        assert(model is not None)
         return model
 
 
@@ -220,7 +221,9 @@ class Customized_Executor(Executor):
         """Train model given client ids"""
 
         # load last global model
-        client_model = self.load_global_model() if model is None else model
+        assert(model is None)
+        model_id = conf.model_id
+        client_model = self.load_global_model(model_id) if model is None else model
 
         conf.clientId, conf.device = clientId, self.device
         # disable nlp and rl temporarily

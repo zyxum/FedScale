@@ -1,4 +1,4 @@
-from fedscale.core.utils.divide_data import DataPartitioner
+from fedscale.dataloaders.divide_data import DataPartitioner
 import logging, csv
 from torch.utils.data import DataLoader
 class Customized_DataPartitioner(DataPartitioner):

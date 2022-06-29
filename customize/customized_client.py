@@ -1,7 +1,7 @@
 import logging, math, torch
 from torch.autograd import Variable
 from fedscale.core.client import Client
-from fedscale.core.utils.nlp import mask_tokens
+from fedscale.dataloaders.nlp import mask_tokens
 class Customized_Client(Client):
     def train(self, client_data, model, conf, dry_run: bool=False):
         clientId = conf.clientId
