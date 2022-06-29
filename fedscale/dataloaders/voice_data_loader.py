@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset, Sampler, DistributedSampler, DataLoader
 
 import csv
-from fedscale.core.utils.spec_augment import spec_augment
+from fedscale.dataloaders.spec_augment import spec_augment
 import collections
 
 windows = {
@@ -167,13 +167,13 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
         """
         file = "train.csv" if train else "test.csv"
         self.ids = []
-        self.client_mapping = collections.defaultdict(list)
+        self.client_mapping = collections.defaultdict(list) 
         self.load_client_mapping(os.path.join(data_dir, file))
 
         self.size = len(self.ids)
         self.targets = [0] * self.size
         self.labels_map = dict([(labels[i], i) for i in range(len(labels))])
-
+        
         super(SpectrogramDataset, self).__init__(audio_conf, normalize, speed_volume_perturb, spec_augment)
 
     def load_client_mapping(self, file):
