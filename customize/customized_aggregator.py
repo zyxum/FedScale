@@ -74,7 +74,7 @@ class Customized_Aggregator(Aggregator):
 
         self.collate_fn = None
         self.task = args.task
-        self.round = 0
+        # self.round = 0
 
         self.start_run_time = time.time()
         self.client_conf = {}
@@ -328,7 +328,7 @@ class Customized_Aggregator(Aggregator):
         # this is only for oort
         self.client_manager.registerScore(results['clientId'], results['utility'],
             auxi=math.sqrt(results['moving_loss']),
-            time_stamp=self.round,
+            time_stamp=self.round[clusterId],
             duration=self.virtual_client_clock[results['clientId']]['computation']+
                 self.virtual_client_clock[results['clientId']]['communication']
         )
@@ -493,7 +493,7 @@ class Customized_Aggregator(Aggregator):
     def log_train_result(self, avg_loss, clusterId):
         """Result will be post on TensorBoard"""
         self.log_writer.add_scalar('Train/round_to_loss_' + str(clusterId), avg_loss, self.round[clusterId])
-        self.log_writer.add_scalar('FAR/time_to_train_loss_' + str(clusterId) + ' (min)', avg_loss, self.cluster_virtual_clocks[clusterId][-1]/60.)
+        self.log_writer.add_scalar('FAR/time_to_train_loss_' + str(clusterId) + ' (min)', avg_loss, self.cluster_virtual_clocks[clusterId]/60.)
         self.log_writer.add_scalar('FAR/round_duration_' + str(clusterId) + ' (min)', self.round_duration[clusterId][-1]/60., self.round[clusterId])
         self.log_writer.add_histogram('FAR/client_duration_' + str(clusterId) + ' (min)', self.flatten_client_duration[clusterId], self.round[clusterId])
 
@@ -527,14 +527,14 @@ class Customized_Aggregator(Aggregator):
                         else:
                             accumulator[key] += self.test_result_accumulator[clusterId][i][key]
             if self.args.task == "detection":
-                self.testing_history[clusterId]['perf'][self.round] = {'round': self.round, 'clock': self.cluster_virtual_clocks[clusterId],
+                self.testing_history[clusterId]['perf'][self.round[clusterId]] = {'round': self.round[clusterId], 'clock': self.cluster_virtual_clocks[clusterId],
                     'top_1': round(accumulator['top_1']*100.0/len(self.test_result_accumulator[clusterId]), 4),
                     'top_5': round(accumulator['top_5']*100.0/len(self.test_result_accumulator[clusterId]), 4),
                     'loss': accumulator['test_loss'],
                     'test_len': accumulator['test_len']
                 }
             else:
-                self.testing_history[clusterId]['perf'][self.round] = {'round': self.round, 'clock': self.cluster_virtual_clocks[clusterId],
+                self.testing_history[clusterId]['perf'][self.round[clusterId]] = {'round': self.round[clusterId], 'clock': self.cluster_virtual_clocks[clusterId],
                     'top_1': round(accumulator['top_1']/accumulator['test_len']*100.0, 4),
                     'top_5': round(accumulator['top_5']/accumulator['test_len']*100.0, 4),
                     'loss': accumulator['test_loss']/accumulator['test_len'],
@@ -544,26 +544,26 @@ class Customized_Aggregator(Aggregator):
 
 
             logging.info("Cluster: {}. FL Testing in epoch: {}, virtual_clock: {}, top_1: {} %, top_5: {} %, sploss: {}, test loss: {:.4f}, test len: {}"
-                    .format(clusterId, self.round[clusterId], self.cluster_virtual_clocks[clusterId][-1], self.testing_history[clusterId]['perf'][self.round]['top_1'],
-                    self.testing_history[clusterId]['perf'][self.round]['top_5'], self.testing_history[clusterId]['perf'][self.round]['sp_loss'],self.testing_history[clusterId]['perf'][self.round]['loss'],
-                    self.testing_history[clusterId]['perf'][self.round]['test_len']))
+                    .format(clusterId, self.round[clusterId], self.cluster_virtual_clocks[clusterId], self.testing_history[clusterId]['perf'][self.round[clusterId]]['top_1'],
+                    self.testing_history[clusterId]['perf'][self.round[clusterId]]['top_5'], self.testing_history[clusterId]['perf'][self.round[clusterId]]['sp_loss'],self.testing_history[clusterId]['perf'][self.round]['loss'],
+                    self.testing_history[clusterId]['perf'][self.round[clusterId]]['test_len']))
 
             # Dump the testing result
             with open(os.path.join(logDir, 'testing_perf_' + str(clusterId)), 'wb') as fout:
                 pickle.dump(self.testing_history[clusterId], fout)
 
             if len(self.loss_accumulator[clusterId]):
-                self.log_writer.add_scalar('Test/round_to_loss_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round]['loss'], self.round[clusterId])
-                self.log_writer.add_scalar('Test/round_to_accuracy_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round]['top_1'], self.round[clusterId])
-                self.log_writer.add_scalar('FAR/time_to_test_loss_' + str(clusterId) + ' (min)', self.testing_history[clusterId]['perf'][self.round]['loss'],
-                                            self.cluster_virtual_clocks[clusterId][-1]/60.)
-                self.log_writer.add_scalar('FAR/time_to_test_accuracy_' + str(clusterId) + ' (min)', self.testing_history[clusterId]['perf'][self.round]['top_1'],
-                                            self.cluster_virtual_clocks[clusterId][-1]/60.)
-                self.log_writer.add_scalars('Test/sp_loss_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round]['sp_loss'], self.round[clusterId])
+                self.log_writer.add_scalar('Test/round_to_loss_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round[clusterId]]['loss'], self.round[clusterId])
+                self.log_writer.add_scalar('Test/round_to_accuracy_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round[clusterId]]['top_1'], self.round[clusterId])
+                self.log_writer.add_scalar('FAR/time_to_test_loss_' + str(clusterId) + ' (min)', self.testing_history[clusterId]['perf'][self.round[clusterId]]['loss'],
+                                            self.cluster_virtual_clocks[clusterId]/60.)
+                self.log_writer.add_scalar('FAR/time_to_test_accuracy_' + str(clusterId) + ' (min)', self.testing_history[clusterId]['perf'][self.round[clusterId]]['top_1'],
+                                            self.cluster_virtual_clocks[clusterId]/60.)
+                self.log_writer.add_scalars('Test/sp_loss_' + str(clusterId), self.testing_history[clusterId]['perf'][self.round[clusterId]]['sp_loss'], self.round[clusterId])
 
             # widen layer on demand
             if self.need_update:
-                model = self.archi_manager.widen(self.testing_history[clusterId]['perf'][self.round]['sp_loss'], self.model[-1])
+                model = self.archi_manager.widen(self.testing_history[clusterId]['perf'][self.round[clusterId]]['sp_loss'], self.model[-1])
                 self.models.append(model)
                 self.model_weights.append(model.state_dict())
                 self.need_update = False

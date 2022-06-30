@@ -145,7 +145,7 @@ class Customized_Executor(Executor):
         # validation
         assert(model is not None)
         # client_model.load_state_dict(train_res['update_weight'])
-        val_res = self.validation_handler(client_id, model)
+        val_res = self.validation_handler(client_id, model, config['model_id'])
 
         train_res['val_res'] = val_res
 
@@ -238,7 +238,7 @@ class Customized_Executor(Executor):
         return train_res, model
 
 
-    def validation_handler(self, clientId, model):
+    def validation_handler(self, clientId, model, model_id):
         """Validate model loss given client ids"""
 
         # not support rl or nlp tasks
@@ -248,7 +248,7 @@ class Customized_Executor(Executor):
         
         val_loss, acc, acc_5, valResults = val_res
         logging.info("At training round {}, client {} ({} labels) has val_loss {}, val_accuracy {:.2f}%, val_5_accuracy {:.2f}% \n"\
-                     .format(self.round, clientId, len(self.training_sets.client_label_cnt[clientId]), val_loss, acc, acc_5))
+                     .format(self.round[model_id], clientId, len(self.training_sets.client_label_cnt[clientId]), val_loss, acc, acc_5))
 
         return valResults
 
@@ -270,14 +270,14 @@ class Customized_Executor(Executor):
             test_loss, acc, acc_5, testResults, layers_outputs, _ = test_res
             self.klayers_outputs.append(layers_outputs)
             logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(model_id, self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
+                        .format(model_id, self.round[model_id], round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
             test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.klayers_outputs[0], dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, sploss = test_res
             self.klayers_outputs.append(layers_outputs)
             self.klayers_outputs.pop(0)
             logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
-                        .format(model_id, self.round, round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
+                        .format(model_id, self.round[model_id], round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
         gc.collect()
 
         return testResults 
