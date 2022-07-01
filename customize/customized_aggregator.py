@@ -420,9 +420,10 @@ class Customized_Aggregator(Aggregator):
         # update select participants
         self.sampled_participants[clusterId] = self.select_participants(
                         select_num_participants=self.cluster_worker[clusterId], overcommitment=self.args.overcommitment, cluster_id=clusterId)
-        logging.info(f"Cluster: {clusterId}. Selected participants to run: {clientsToRun}")
+        logging.info(f"Cluster: {clusterId}. Sampled participants to run: {self.sampled_participants[clusterId]}")
         (clientsToRun, round_stragglers, virtual_client_clock, round_duration, flatten_client_duration) = self.tictak_client_tasks(
                         self.sampled_participants[clusterId], self.cluster_worker[clusterId])
+        logging.info(f"Cluster: {clusterId}. Selected participants to run: {clientsToRun}")
 
 
         # Issue requests to the resource manager; Tasks ordered by the completion time
@@ -684,9 +685,8 @@ class Customized_Aggregator(Aggregator):
         execution_status, execution_msg = request.status, request.msg
         meta_result, data_result = request.meta_result, request.data_result
 
-        clusterId = self.client_manager.query_cluster_id(client_id)
-
         if event == events.CLIENT_TRAIN:
+            clusterId = self.client_manager.query_cluster_id(client_id)
             # Training results may be uploaded in CLIENT_EXECUTE_RESULT request later,
             # so we need to specify whether to ask client to do so (in case of straggler/timeout in real FL).
             if execution_status is False:
@@ -697,7 +697,7 @@ class Customized_Aggregator(Aggregator):
                 self.individual_client_events[executor_id].appendleft((events.CLIENT_TRAIN, clusterId))
 
         elif event in (events.MODEL_TEST, events.UPLOAD_MODEL):
-            self.add_event_handler(executor_id, event, meta_result, data_result)
+            self.add_event_handler(client_id, event, meta_result, data_result)
         else:
             logging.error(f"Received undefined event {event} from client {client_id}")
         return self.CLIENT_PING(request, context)
@@ -732,6 +732,7 @@ class Customized_Aggregator(Aggregator):
 
                 elif current_event == events.MODEL_TEST:
                     self.testing_completion_handler(client_id, self.deserialize_response(data))
+                    # here client_id is useless
 
                 else:
                     logging.error(f"Event {current_event} is not defined")
