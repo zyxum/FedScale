@@ -1,3 +1,4 @@
+from copy import copy, deepcopy
 import logging, gc, time, collections, os, random, pickle
 import torch
 import numpy as np
@@ -184,6 +185,11 @@ class Customized_Executor(Executor):
     
     def update_model_handler(self, model, model_id):
         """Update the model copy on this executor"""
+        if model_id == len(self.models):
+            self.models.append(None)
+            self.round.append(deepcopy(self.round[-1]))
+        logging.info(model_id)
+        logging.info(len(self.models))
         self.models[model_id] = model
         self.round[model_id] += 1
 
@@ -264,18 +270,21 @@ class Customized_Executor(Executor):
 
         model = self.models[model_id]
 
-        if len(self.klayers_outputs) != self.sploss_gap:
-            logging.info(f"sploss gap: {self.sploss_gap}, current length: {len(self.klayers_outputs)}")
+        if model_id == len(self.klayers_outputs):
+            self.klayers_outputs.append([])
+
+        if len(self.klayers_outputs[model_id]) != self.sploss_gap:
+            logging.info(f"sploss gap: {self.sploss_gap}, current length: {len(self.klayers_outputs[model_id])}")
             test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, _ = test_res
-            self.klayers_outputs.append(layers_outputs)
+            self.klayers_outputs[model_id].append(layers_outputs)
             logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
                         .format(model_id, self.round[model_id], round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), test_loss, acc*100., acc_5*100.))
         else:
-            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.klayers_outputs[0], dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
+            test_res = test_model(self.this_rank, model, data_loader, device=device, criterion=criterion, reference=self.klayers_outputs[model_id][0], dry_run=args.dry_test, layers_names=self.archi_manager.get_trainable_layer_names())
             test_loss, acc, acc_5, testResults, layers_outputs, sploss = test_res
-            self.klayers_outputs.append(layers_outputs)
-            self.klayers_outputs.pop(0)
+            self.klayers_outputs[model_id].append(layers_outputs)
+            self.klayers_outputs[model_id].pop(0)
             logging.info("Cluster: {}, After aggregation epoch {}, CumulTime {}, eval_time {}, sploss {}, test_loss {}, test_accuracy {:.2f}%, test_5_accuracy {:.2f}% \n"
                         .format(model_id, self.round[model_id], round(time.time() - self.start_run_time, 4), round(time.time() - evalStart, 4), sploss, test_loss, acc*100., acc_5*100.))
         gc.collect()

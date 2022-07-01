@@ -724,8 +724,8 @@ class Customized_Aggregator(Aggregator):
             # Handle events queued on the aggregator
             elif len(self.sever_events_queue) > 0:
                 client_id, current_event, meta, data = self.sever_events_queue.popleft()
-                clusterId = self.client_manager.query_cluster_id(client_id)
                 if current_event == events.UPLOAD_MODEL:
+                    clusterId = self.client_manager.query_cluster_id(client_id)
                     self.client_completion_handler(self.deserialize_response(data))
                     if len(self.stats_util_accumulator[clusterId]) == self.tasks_cluster[clusterId]:
                             self.round_completion_handler(clusterId)

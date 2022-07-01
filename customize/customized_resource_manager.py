@@ -13,6 +13,8 @@ class Customized_ResourceManager(ResourceManager):
 
     def register_tasks(self, clientToRun, clusterId):
         self.client_run_queue[clusterId] = clientToRun.copy()
+        if clusterId == len(self.client_run_queue_idx):
+            self.client_run_queue_idx.append(0)
         self.client_run_queue_idx[clusterId] = 0
 
     def remove_client_task(self, client_id, clusterId):
