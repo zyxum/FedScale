@@ -155,9 +155,9 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
         handle.remove()
 
     # exhaust dataloader
-    if dry_run:
-        for data, target in test_data:
-            continue
+    # if dry_run:
+    #     for data, target in test_data:
+    #         continue
 
     logging.info("finish testing")
     return test_loss, acc, acc_5, testRes, layers_outputs, sploss

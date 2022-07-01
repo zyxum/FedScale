@@ -27,7 +27,7 @@ class customized_clientManager(object):
             from thirdparty.oort.oort import create_training_selector
             #sys.path.append(current) 
             self.ucbSampler =  create_training_selector(args=args)
-        self.feasibleClients = [[]] # feasible clients per cluster
+        # self.feasibleClients = [[]] # feasible clients per cluster
         self.rng = Random()
         self.rng.seed(sample_seed)
         self.count = 0
@@ -36,7 +36,7 @@ class customized_clientManager(object):
         self.args = args
 
         # ==== for cluster management ====
-        self.clusters = defaultdict(list)
+        self.clusters = defaultdict(set)
         self.val_loss = defaultdict(list)
         self.train_loss = defaultdict(list)
         self.avg_val_loss = []
@@ -60,9 +60,9 @@ class customized_clientManager(object):
         if size >= self.filter_less and size <= self.filter_more:
             # register clients in cluster
             assert(clientId not in self.clusters[0])
-            self.clusters[0].append(clientId)
+            self.clusters[0].add(clientId)
             # logging.info(f"get client {uniqueId}")
-            self.feasibleClients[0].append(clientId)
+            # self.feasibleClients[0].append(clientId)
             self.feasible_samples += size
 
             if self.mode == "oort":
@@ -75,7 +75,11 @@ class customized_clientManager(object):
             # logging.info(f"remove client {uniqueId}")
 
     def getAllClients(self):
-        return [clients for cluster in self.feasibleClients for clients in cluster]
+        # return [clients for cluster in self.feasibleClients for clients in cluster]
+        all_clients = []
+        for clusterId in self.clusters.keys():
+            all_clients += list(self.clusters[clusterId])
+        return all_clients
 
     def getAllClientsLength(self):
         return len(self.getAllClients())
@@ -130,10 +134,10 @@ class customized_clientManager(object):
 
     def nextClientIdToRun(self, hostId):
         init_id = hostId - 1
-        lenPossible = len(self.feasibleClients)
+        lenPossible = self.getAllClientsLength()
 
         while True:
-            clientId = str(self.feasibleClients[init_id])
+            clientId = str(self.getAllClientsLength())
             csize = self.Clients[clientId].size
             if csize >= self.filter_less and csize <= self.filter_more:
                 return int(clientId)
@@ -178,12 +182,12 @@ class customized_clientManager(object):
 
     def getFeasibleClients(self, cur_time, clusterId):
         if self.user_trace is None:
-            clients_online = self.feasibleClients[clusterId]
+            clients_online = self.clusters[clusterId]
         else:
-            clients_online = [clientId for clientId in self.feasibleClients[clusterId] if self.Clients[self.getUniqueId(0, clientId)].isActive(cur_time)]
+            clients_online = [clientId for clientId in self.clusters[clusterId] if self.Clients[self.getUniqueId(0, clientId)].isActive(cur_time)]
 
-        logging.info(f"luster: {clusterId}, Wall clock time: {round(cur_time)}, {len(clients_online)} clients online, " + \
-                    f"{len(self.feasibleClients)-len(clients_online)} clients offline")
+        logging.info(f"cluster: {clusterId}, Wall clock time: {round(cur_time)}, {len(clients_online)} clients online, " + \
+                    f"{self.getAllClientsLength()-len(clients_online)} clients offline")
 
         return clients_online
 
@@ -258,7 +262,7 @@ class customized_clientManager(object):
             return -1
         else:
             return (self.val_loss[clientId][-1] + self.train_loss[clientId][-1])\
-                * self.round_duration[clientId][-1]
+                * self.round_duration[clientId]
     
     def split_cluster(self):
         # get the clients' id and scores of the newest cluster
@@ -275,8 +279,9 @@ class customized_clientManager(object):
         new_cluster = len(self.clusters)
         for client_id in picked_clients.keys():
             if picked_clients[client_id] > median:
-                self.clusters[new_cluster].append(client_id)
-                self.clusters[new_cluster-1].pop(client_id)
+                self.clusters[new_cluster].add(client_id)
+                self.clusters[new_cluster-1].remove(client_id)
+        logging.info(f"re-splitted cluster: {self.clusters[new_cluster]}")
     
     def query_cluster_id(self, client_id: str):
         for cluster_id in self.clusters.keys():
