@@ -108,6 +108,7 @@ class Customized_Aggregator(Aggregator):
         self.tasks_cluster = [0]
         self.need_update = False
         self.flatten_client_duration = {}
+        self.virtual_client_clock = [{}]
         # self.cluster_manager = Cluster_Manager()
 
 
@@ -329,8 +330,8 @@ class Customized_Aggregator(Aggregator):
         self.client_manager.registerScore(results['clientId'], results['utility'],
             auxi=math.sqrt(results['moving_loss']),
             time_stamp=self.round[clusterId],
-            duration=self.virtual_client_clock[results['clientId']]['computation']+
-                self.virtual_client_clock[results['clientId']]['communication']
+            duration=self.virtual_client_clock[clusterId][results['clientId']]['computation']+
+                self.virtual_client_clock[clusterId][results['clientId']]['communication']
         )
 
         """
@@ -403,7 +404,7 @@ class Customized_Aggregator(Aggregator):
         for clientId in self.round_stragglers[clusterId]:
             self.client_manager.registerScore(clientId, avgUtilLastround,
                     time_stamp=self.round[clusterId],
-                    duration=self.virtual_client_clock[clientId]['computation']+self.virtual_client_clock[clientId]['communication'],
+                    duration=self.virtual_client_clock[clusterId][clientId]['computation']+self.virtual_client_clock[clusterId][clientId]['communication'],
                     success=False)
         
         avg_loss = sum(self.loss_accumulator[clusterId])/max(1, len(self.loss_accumulator[clusterId]))
@@ -461,12 +462,13 @@ class Customized_Aggregator(Aggregator):
                 self.tasks_cluster.append(0)
                 self.round_stragglers.append([])
                 self.sampled_participants.append([])
+                self.virtual_client_clock.append(None)
 
 
         self.save_last_param(clusterId)
 
         self.round_stragglers[clusterId] = round_stragglers
-        self.virtual_client_clock = virtual_client_clock
+        self.virtual_client_clock[clusterId] = virtual_client_clock
         self.flatten_client_duration[clusterId] = np.array(flatten_client_duration)
         self.round_duration[clusterId] = round_duration
         self.model_in_update[clusterId] = 0
