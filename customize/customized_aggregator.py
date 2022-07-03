@@ -711,9 +711,10 @@ class Customized_Aggregator(Aggregator):
         """FL clients complete the execution task."""
 
         executor_id, client_id, event = request.executor_id, request.client_id, request.event
-        clusterId = request.cluster_id
+        # clusterId = request.cluster_id
         execution_status, execution_msg = request.status, request.msg
         meta_result, data_result = request.meta_result, request.data_result
+        clusterId = int(execution_msg)
 
         if event == events.CLIENT_TRAIN:
             # Training results may be uploaded in CLIENT_EXECUTE_RESULT request later,
