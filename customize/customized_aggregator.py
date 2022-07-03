@@ -239,7 +239,7 @@ class Customized_Aggregator(Aggregator):
                 self.round_completion_handler(0)
 
     
-    def tictak_client_tasks(self, sampled_clients, num_clients_to_collect):
+    def tictak_client_tasks(self, sampled_clients, num_clients_to_collect, clusterId):
         if self.experiment_mode == events.SIMULATION_MODE:
             # NOTE: We try to remove dummy events as much as possible in simulations,
             # by removing the stragglers/offline clients in overcommitment"""
@@ -249,14 +249,13 @@ class Customized_Aggregator(Aggregator):
             # 1. remove dummy clients that are not available to the end of training
             for client_to_run in sampled_clients:
                 client_cfg = self.client_conf.get(client_to_run, self.args)
-                cluster_id = self.client_manager.query_cluster_id(client_to_run)
                 exe_cost = self.client_manager.getCompletionTime(client_to_run,
                                         batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps,
                                         upload_size=self.model_update_size, download_size=self.model_update_size)
 
                 roundDuration = exe_cost['computation'] + exe_cost['communication']
                 # if the client is not active by the time of collection, we consider it is lost in this round
-                if self.client_manager.isClientActive(client_to_run, roundDuration + self.cluster_virtual_clocks[cluster_id]):
+                if self.client_manager.isClientActive(client_to_run, roundDuration + self.cluster_virtual_clocks[clusterId]):
                     sampledClientsReal.append(client_to_run)
                     completionTimes.append(roundDuration)
                     completed_client_clock[client_to_run] = exe_cost
@@ -318,7 +317,7 @@ class Customized_Aggregator(Aggregator):
 
         # Feed metrics to client sampler
         clientId = results['clientId']
-        clusterId = self.client_manager.query_cluster_id(clientId)
+        clusterId = results['clusterId']
         client_val_res = results['val_res']
         self.stats_util_accumulator[clusterId].append(results['utility'])
         self.loss_accumulator[clusterId].append(results['moving_loss'])
@@ -423,7 +422,7 @@ class Customized_Aggregator(Aggregator):
                         select_num_participants=self.cluster_worker[clusterId], overcommitment=self.args.overcommitment, cluster_id=clusterId)
         logging.info(f"Cluster: {clusterId}. Sampled participants to run: {self.sampled_participants[clusterId]}")
         (clientsToRun, round_stragglers, virtual_client_clock, round_duration, flatten_client_duration) = self.tictak_client_tasks(
-                        self.sampled_participants[clusterId], self.cluster_worker[clusterId])
+                        self.sampled_participants[clusterId], self.cluster_worker[clusterId], clusterId)
         logging.info(f"Cluster: {clusterId}. Selected participants to run: {clientsToRun}")
 
 
@@ -646,6 +645,9 @@ class Customized_Aggregator(Aggregator):
         """Get global model that would be used by all FL clients (in default FL)"""
         return self.models[clusterId]
 
+    def add_event_handler(self, client_id, cluster_id, event, meta, data):
+        """ Due to the large volume of requests, we will put all events into a queue first."""
+        self.sever_events_queue.append((client_id, cluster_id, event, meta, data))
 
     def CLIENT_REGISTER(self, request, context):
         """FL Client register to the aggregator"""
@@ -709,11 +711,11 @@ class Customized_Aggregator(Aggregator):
         """FL clients complete the execution task."""
 
         executor_id, client_id, event = request.executor_id, request.client_id, request.event
+        clusterId = request.cluster_id
         execution_status, execution_msg = request.status, request.msg
         meta_result, data_result = request.meta_result, request.data_result
 
         if event == events.CLIENT_TRAIN:
-            clusterId = self.client_manager.query_cluster_id(client_id)
             # Training results may be uploaded in CLIENT_EXECUTE_RESULT request later,
             # so we need to specify whether to ask client to do so (in case of straggler/timeout in real FL).
             if execution_status is False:
@@ -725,7 +727,7 @@ class Customized_Aggregator(Aggregator):
                 self.individual_client_events[executor_id].appendleft((events.CLIENT_TRAIN, clusterId))
 
         elif event in (events.MODEL_TEST, events.UPLOAD_MODEL):
-            self.add_event_handler(client_id, event, meta_result, data_result)
+            self.add_event_handler(client_id, clusterId, event, meta_result, data_result)
         else:
             logging.error(f"Received undefined event {event} from client {client_id}")
         return self.CLIENT_PING(request, context)
@@ -751,9 +753,9 @@ class Customized_Aggregator(Aggregator):
 
             # Handle events queued on the aggregator
             elif len(self.sever_events_queue) > 0:
-                client_id, current_event, meta, data = self.sever_events_queue.popleft()
+                client_id, clusterId, current_event, meta, data = self.sever_events_queue.popleft()
                 if current_event == events.UPLOAD_MODEL:
-                    clusterId = self.client_manager.query_cluster_id(client_id)
+                    # clusterId = self.client_manager.query_cluster_id(client_id)
                     self.client_completion_handler(self.deserialize_response(data))
                     if len(self.stats_util_accumulator[clusterId]) == self.tasks_cluster[clusterId]:
                             self.round_completion_handler(clusterId)

@@ -149,10 +149,12 @@ class Customized_Executor(Executor):
         val_res = self.validation_handler(client_id, model, config['model_id'])
 
         train_res['val_res'] = val_res
+        train_res['clusterId'] = train_config['model_id']
 
         # Report execution completion meta information
         response = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION(job_api_pb2.CompleteRequest(
             client_id = str(client_id), executor_id = self.executor_id,
+            culster_id = train_config['model_id'],
             event = events.CLIENT_TRAIN, status = True, msg = None,
             meta_result = None, data_result = None
         ))
@@ -171,6 +173,7 @@ class Customized_Executor(Executor):
         response = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION(
             job_api_pb2.CompleteRequest(
                 client_id = self.executor_id, executor_id = self.executor_id,
+                cluster_id = test_res['clusterId'],
                 event = events.MODEL_TEST, status = True, msg = None,
                 meta_result = None, data_result = self.serialize_response(test_res)
             )
@@ -338,6 +341,7 @@ class Customized_Executor(Executor):
                     # Upload model updates
                     _ = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION.future(
                         job_api_pb2.CompleteRequest(client_id = str(client_id), executor_id = self.executor_id,
+                        cluster_id = train_config['client_id'],
                         event = events.UPLOAD_MODEL, status = True, msg = None,
                         meta_result = None, data_result = self.serialize_response(train_res)
                     ))
