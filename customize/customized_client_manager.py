@@ -295,7 +295,7 @@ class customized_clientManager(object):
     def get_cluster_worker(self, clusterId, total_worker):
         assert(clusterId in self.clusters.keys())
         # consider fairness among clusters
-        logging.info(self.clusters[clusterId])
+        logging.info(len(self.clusters[clusterId]))
         logging.info(total_worker)
         logging.info(self.getAllClientsLength())
         return max(int(total_worker * len(self.clusters[clusterId]) / self.getAllClientsLength()), 5)

@@ -271,8 +271,6 @@ class Customized_Aggregator(Aggregator):
             round_duration = completionTimes[top_k_index[-1]]
             completionTimes.sort()
 
-            logging.info(f"after tictak: clients_to_run: {client_to_run}, dummy_clients: {dummy_clients}")
-
             return (clients_to_run, dummy_clients, 
                     completed_client_clock, round_duration, 
                     completionTimes[:num_clients_to_collect])
@@ -391,6 +389,7 @@ class Customized_Aggregator(Aggregator):
 
 
     def round_completion_handler(self, clusterId):
+        logging.info(f"running round completion handler at cluster {clusterId}")
         self.cluster_virtual_clocks[clusterId] += self.round_duration[clusterId]
         self.round[clusterId] += 1
 
@@ -628,6 +627,7 @@ class Customized_Aggregator(Aggregator):
         """Issue a new client training task to the executor"""
 
         next_clientId = self.resource_manager.get_next_task(clusterId, executorId)
+        logging.info(f"creating tasks for client {next_clientId} at cluster {clusterId}")
         train_config = None
         # NOTE: model = None then the executor will load the global model broadcasted in UPDATE_MODEL
         model = None

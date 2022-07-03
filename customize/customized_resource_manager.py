@@ -2,6 +2,7 @@ from collections import defaultdict
 from fedscale.core import events
 import threading
 from fedscale.core.resource_manager import ResourceManager
+import logging
 
 class Customized_ResourceManager(ResourceManager):
 
@@ -12,6 +13,7 @@ class Customized_ResourceManager(ResourceManager):
         self.update_lock = threading.Lock()
 
     def register_tasks(self, clientToRun, clusterId):
+        logging.info(f"register clients {clientToRun} to cluster {clusterId}")
         self.client_run_queue[clusterId] = clientToRun.copy()
         if clusterId == len(self.client_run_queue_idx):
             self.client_run_queue_idx.append(0)
