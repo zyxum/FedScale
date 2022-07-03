@@ -188,8 +188,6 @@ class Customized_Executor(Executor):
         if model_id == len(self.models):
             self.models.append(None)
             self.round.append(deepcopy(self.round[-1]))
-        logging.info(model_id)
-        logging.info(len(self.models))
         self.models[model_id] = model
         self.round[model_id] += 1
 

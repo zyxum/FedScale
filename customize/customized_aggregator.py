@@ -673,7 +673,7 @@ class Customized_Aggregator(Aggregator):
                 response_msg = self.get_shutdown_config(executor_id)
 
         if current_event != events.DUMMY_EVENT:
-            logging.info(f"Issue EVENT ({current_event}) to CLIENT ({executor_id})")
+            logging.info(f"Issue EVENT ({current_event}) to CLIENT ({executor_id}) at CLUSTER ({current_clusterId})")
         response_msg, response_data = self.serialize_response(response_msg), self.serialize_response(response_data)
         # NOTE: in simulation mode, response data is pickle for faster (de)serialization
         return job_api_pb2.ServerResponse(event=current_event,
@@ -693,6 +693,7 @@ class Customized_Aggregator(Aggregator):
             # so we need to specify whether to ask client to do so (in case of straggler/timeout in real FL).
             if execution_status is False:
                 logging.error(f"Executor {executor_id} fails to run client {client_id}, due to {execution_msg}")
+            logging.info(f"query cluster {clusterId} for next task")
             if self.resource_manager.has_next_task(clusterId, executor_id):
                 # NOTE: we do not pop the train immediately in simulation mode,
                 # since the executor may run multiple clients
