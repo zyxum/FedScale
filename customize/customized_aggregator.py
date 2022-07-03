@@ -109,6 +109,7 @@ class Customized_Aggregator(Aggregator):
         self.need_update = False
         self.flatten_client_duration = {}
         self.virtual_client_clock = [{}]
+        self.finish_update = False
         # self.cluster_manager = Cluster_Manager()
 
 
@@ -438,31 +439,31 @@ class Customized_Aggregator(Aggregator):
             self.sampled_executors = [str(c_id) for c_id in self.sampled_participants[clusterId]]
 
         # record validate loss to cluster manager
-        if len(self.client_val_loss_in_update) != 0 and not self.need_update\
+        if len(self.client_val_loss_in_update) != 0 and (not self.need_update) \
             and clusterId == len(self.client_manager.clusters) - 1:
             self.need_update = self.client_manager.register_loss(
                 self.client_val_loss_in_update[clusterId],
                 self.client_train_loss_in_update[clusterId])
-            if self.need_update:
-                # prepare to split cluster
-                logging.info(f"splitting cluster")
-                self.client_manager.split_cluster()
-                self.stats_util_accumulator.append([])
-                self.loss_accumulator.append([])
-                self.test_result_accumulator.append([])
-                self.testing_history.append(deepcopy(self.testing_history[-1]))
-                self.cluster_virtual_clocks.append(deepcopy(self.cluster_virtual_clocks[-1]))
-                self.cluster_round_duration.append(0.)
-                self.client_val_loss_in_update.append({})
-                self.client_train_loss_in_update.append({})
-                self.model_in_update.append(0)
-                self.round_duration.append(0.)
-                self.round.append(deepcopy(self.round[-1]))
-                self.cluster_worker.append(0)
-                self.tasks_cluster.append(0)
-                self.round_stragglers.append([])
-                self.sampled_participants.append([])
-                self.virtual_client_clock.append(None)
+            # if self.need_update:
+            #     # prepare to split cluster
+            #     logging.info(f"splitting cluster")
+            #     self.client_manager.split_cluster()
+            #     self.stats_util_accumulator.append([])
+            #     self.loss_accumulator.append([])
+            #     self.test_result_accumulator.append([])
+            #     self.testing_history.append(deepcopy(self.testing_history[-1]))
+            #     self.cluster_virtual_clocks.append(deepcopy(self.cluster_virtual_clocks[-1]))
+            #     self.cluster_round_duration.append(0.)
+            #     self.client_val_loss_in_update.append({})
+            #     self.client_train_loss_in_update.append({})
+            #     self.model_in_update.append(0)
+            #     self.round_duration.append(0.)
+            #     self.round.append(deepcopy(self.round[-1]))
+            #     self.cluster_worker.append(0)
+            #     self.tasks_cluster.append(0)
+            #     self.round_stragglers.append([])
+            #     self.sampled_participants.append([])
+            #     self.virtual_client_clock.append(None)
 
 
         self.save_last_param(clusterId)
@@ -490,7 +491,9 @@ class Customized_Aggregator(Aggregator):
             self.broadcast_aggregator_events(events.UPDATE_MODEL, clusterId=clusterId)
             self.broadcast_aggregator_events(events.START_ROUND, clusterId=clusterId)
         
-        logging.info(f"finished broadcast events")
+        if self.finish_update and clusterId == len(self.models) - 1:
+            self.finish_update = True
+            self.need_update = False
 
 
     def log_train_result(self, avg_loss, clusterId):
@@ -566,10 +569,32 @@ class Customized_Aggregator(Aggregator):
 
             # widen layer on demand
             if self.need_update and len(self.testing_history[clusterId]['perf'][self.round[clusterId]]['sp_loss']) > 0:
+
+                logging.info(f"splitting cluster")
+                self.client_manager.split_cluster()
+                self.stats_util_accumulator.append([])
+                self.loss_accumulator.append([])
+                self.test_result_accumulator.append([])
+                self.testing_history.append(deepcopy(self.testing_history[-1]))
+                self.cluster_virtual_clocks.append(deepcopy(self.cluster_virtual_clocks[-1]))
+                self.cluster_round_duration.append(0.)
+                self.client_val_loss_in_update.append({})
+                self.client_train_loss_in_update.append({})
+                self.model_in_update.append(0)
+                self.round_duration.append(0.)
+                self.round.append(deepcopy(self.round[-1]))
+                self.cluster_worker.append(0)
+                self.tasks_cluster.append(0)
+                self.round_stragglers.append([])
+                self.sampled_participants.append([])
+                self.virtual_client_clock.append(None)
+
+                logging.info(f"optimizing model")
                 model = self.archi_manager.widen(self.testing_history[clusterId]['perf'][self.round[clusterId]]['sp_loss'], self.models[-1])
                 self.models.append(model)
                 self.model_weights.append(model.state_dict())
-                self.need_update = False
+                # self.need_update = False
+                self.finish_update = True
                 self.round_completion_handler(len(self.models) - 1)
 
 
