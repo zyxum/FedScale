@@ -715,6 +715,7 @@ class Customized_Aggregator(Aggregator):
         execution_status, execution_msg = request.status, request.msg
         meta_result, data_result = request.meta_result, request.data_result
         clusterId = int(execution_msg)
+        logging.info(f"get message from cluster {clusterId}")
 
         if event == events.CLIENT_TRAIN:
             # Training results may be uploaded in CLIENT_EXECUTE_RESULT request later,

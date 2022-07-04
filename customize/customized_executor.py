@@ -339,7 +339,7 @@ class Customized_Executor(Executor):
                     # Upload model updates
                     _ = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION.future(
                         job_api_pb2.CompleteRequest(client_id = str(client_id), executor_id = self.executor_id,
-                        event = events.UPLOAD_MODEL, status = True, msg = str(train_config['client_id']),
+                        event = events.UPLOAD_MODEL, status = True, msg = str(train_config['model_id']),
                         meta_result = None, data_result = self.serialize_response(train_res)
                     ))
 
