@@ -124,6 +124,9 @@ class Customized_Executor(Executor):
     
     def dispatch_worker_events(self, request):
         """Add new events to worker queues"""
+        event = request.event
+        clusterId = request.meta['model_id']
+        logging.info(f"received ping response {event} from sever at cluster {clusterId}")
         self.event_queue.append(request)
 
 
