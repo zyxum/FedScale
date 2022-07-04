@@ -126,7 +126,7 @@ class Customized_Executor(Executor):
         """Add new events to worker queues"""
         current_event = request.event
         if current_event == events.CLIENT_TRAIN:
-            clusterId = request.meta['model_id']
+            clusterId = self.deserialize_response(request.meta)['model_id']
             logging.info(f"received ping response {current_event} from sever at cluster {clusterId}")
         self.event_queue.append(request)
 
