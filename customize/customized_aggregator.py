@@ -702,6 +702,9 @@ class Customized_Aggregator(Aggregator):
         if current_event != events.DUMMY_EVENT:
             logging.info(f"Issue EVENT ({current_event}) to CLIENT ({executor_id}) at CLUSTER ({current_clusterId})")
         response_msg, response_data = self.serialize_response(response_msg), self.serialize_response(response_data)
+        if current_event == events.CLIENT_TRAIN:
+            meta = self.deserialize_response(response_msg)
+            logging.info(f"at client ping {meta['model_id']}")
         # NOTE: in simulation mode, response data is pickle for faster (de)serialization
         return job_api_pb2.ServerResponse(event=current_event,
                 meta=response_msg, data=response_data)
@@ -732,7 +735,12 @@ class Customized_Aggregator(Aggregator):
             self.add_event_handler(client_id, clusterId, event, meta_result, data_result)
         else:
             logging.error(f"Received undefined event {event} from client {client_id}")
-        return self.CLIENT_PING(request, context)
+        if event != events.UPLOAD_MODEL:
+            return self.CLIENT_PING(request, context)
+        else:
+            response = self.serialize_response(events.DUMMY_RESPONSE)
+            return job_api_pb2.ServerResponse(event=events.DUMMY_EVENT,
+                meta=response, data=response)
 
 
     def event_monitor(self):
