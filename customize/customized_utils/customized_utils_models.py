@@ -121,10 +121,6 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
                 logging.info(f"Testing of failed as {ex}")
                 break
             test_len += len(target)
-            # only for debug
-            # count += 1
-            # if count > 5:
-            #     break
 
     if len(reference) != 0:
         for i, layer_output in enumerate(layers_outputs):
@@ -153,11 +149,5 @@ def test_model(rank, model, test_data, device='cpu', criterion=nn.NLLLoss(), ref
     # remove hooks
     for handle in hook_handles:
         handle.remove()
-
-    # exhaust dataloader
-    # if dry_run:
-    #     for data, target in test_data:
-    #         continue
-
-    logging.info("finish testing")
+        
     return test_loss, acc, acc_5, testRes, layers_outputs, sploss
