@@ -271,7 +271,7 @@ class Customized_Executor(Executor):
 
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
 
-        model = self.models[model_id]
+        model = self.load_global_model(model_id)
 
         if model_id == len(self.klayers_outputs):
             self.klayers_outputs.append([])
