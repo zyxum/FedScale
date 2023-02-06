@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import logging
 
 
 class FjORD_CNN(nn.Module):
@@ -16,7 +17,7 @@ class FjORD_CNN(nn.Module):
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, padding="same")
         self.activation2 = nn.ReLU()
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool2 = nn.AdaptiveMaxPool2d((7,7))
         self.linear1 = nn.Linear(in_features=64*7*7, out_features=2048)
         self.linear2 = nn.Linear(in_features=2048, out_features=num_classes)
 
@@ -24,8 +25,12 @@ class FjORD_CNN(nn.Module):
     def forward(self, x):
         x = self.pool1(self.activation1(self.conv1(x)))
         x = self.pool2(self.activation2(self.conv2(x)))
+        # logging.info(x.shape)
         x = x.view(x.size(0), -1)
-        x = self.linear2(self.linear1(x))
+        # logging.info(x.shape)
+        x = self.linear1(x)
+        # logging.info(x.shape)
+        x = self.linear2(x)
         x = nn.functional.softmax(x, dim=1)
         return x
 

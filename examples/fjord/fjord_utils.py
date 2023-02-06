@@ -43,18 +43,21 @@ def shrink_width(old_layer: torch.nn.Module,
             groups=old_layer.groups,
             bias=True if old_layer.bias is not None else False
         )
-        new_layer.state_dict()["weight"] = old_layer.state_dict()["weight"][:new_in_channels, :new_out_channels, :, :]
+        new_layer.state_dict()["weight"] = old_layer.state_dict()["weight"][:new_out_channels, :new_in_channels, :, :]
         if "bias" in new_layer.state_dict():
             new_layer.state_dict()["bias"] = old_layer.state_dict()["bias"][:new_out_channels]
     elif isinstance(old_layer, torch.nn.Linear):
-        new_in_features = math.ceil(old_layer.in_features * p)
+        if old_layer.in_features % 49 == 0:
+            new_in_features = math.ceil(old_layer.in_features / 49 * p) * 49
+        else:
+            new_in_features = math.ceil(old_layer.in_features * p)
         new_out_features = math.ceil(old_layer.out_features * p) if not is_last else old_layer.out_features
         new_layer = torch.nn.Linear(
             in_features=new_in_features,
             out_features=new_out_features,
             bias=True if old_layer.bias is not None else False
         )
-        new_layer.state_dict()["weight"] = old_layer.state_dict()["weight"][:new_in_features, :new_out_features]
+        new_layer.state_dict()["weight"] = old_layer.state_dict()["weight"][:new_out_features, :new_in_features]
         if "bias" in new_layer.state_dict():
             new_layer.state_dict()["bias"] = old_layer.state_dict()["bias"][:new_out_features]
     elif isinstance(old_layer, torch.nn.BatchNorm2d):
@@ -77,6 +80,8 @@ def shrink_width(old_layer: torch.nn.Module,
 def sample_subnetwork(model: torch.nn.Module, p: float = 1.0) -> torch.nn.Module:
     # get all layers
     model = deepcopy(model)
+    if p >= 1.0:
+        return model
     layers = set()
     first = None
     for name, _ in model.named_parameters():
@@ -99,7 +104,7 @@ def load_sub_layer(layer: torch.nn.Module, sub_layer: torch.nn.Module):
     if isinstance(sub_layer, torch.nn.Conv2d):
         in_channels = sub_layer.in_channels
         out_channels = sub_layer.out_channels
-        layer.state_dict()["weight"][:in_channels, :out_channels, :, :] = deepcopy(
+        layer.state_dict()["weight"][:out_channels, :in_channels, :, :] = deepcopy(
             sub_layer.state_dict()["weight"]
         )
         if "bias" in layer.state_dict():
@@ -109,7 +114,7 @@ def load_sub_layer(layer: torch.nn.Module, sub_layer: torch.nn.Module):
     elif isinstance(sub_layer, torch.nn.Linear):
         in_features = sub_layer.in_features
         out_features = sub_layer.out_features
-        layer.state_dict()["weight"][:in_features, :out_features] = deepcopy(
+        layer.state_dict()["weight"][:out_features, :in_features] = deepcopy(
             sub_layer.state_dict()["weight"]
         )
         if "bias" in layer.state_dict():

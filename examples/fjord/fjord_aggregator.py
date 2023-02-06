@@ -2,12 +2,14 @@ from fedscale.cloud.aggregation.aggregator import Aggregator
 from fedscale.cloud import commons
 from fedscale.cloud.fllibs import outputClass, init_model
 
+import fjord_config_parser as parser
 from fjord_utils import sample_subnetwork
 
 import logging
 import numpy as np
+import numpy
 import torch
-import copy
+
 
 class FjORD_Aggregator(Aggregator):
 
@@ -15,10 +17,10 @@ class FjORD_Aggregator(Aggregator):
         super(FjORD_Aggregator, self).__init__(args)
         self.sub_models = {}
         self.sub_model_weights = {}
-        self.trained_data_size = 0
+        self.trained_data_size = .0
 
         # setup hardware
-        if self.args.model_zoo == "fjord-paper":
+        if self.args.model[:5] == "fjord":
             self.client_tier = {}
             self.eval_mode = "repr"
             uniform = self.args.uniform
@@ -34,23 +36,18 @@ class FjORD_Aggregator(Aggregator):
                     dis_accum += drop_scale / uniform
                 else:
                     self.dp.append([ratio, 1 - dis_accum])
+            logging.info(f"current model partition {self.dp}")
         else:
             self.eval_mode = "eval"
 
     def init_model(self):
         """Load global model and sample sub models
         """
-        assert self.args.engin == commons.PYTORCH
+        assert self.args.engine == commons.PYTORCH
 
-        if self.args.model_zoo == "fjord-paper":
-            if self.args.model == "resnet18":
-                from fjord_models.fjord_resnet18 import get_resnet18
-                self.model = get_resnet18(num_classes=outputClass[self.args.data_set])
-            elif self.args.model == "cnn":
-                from fjord_models.fjord_cnn import FjORD_CNN
-                self.model = FjORD_CNN(num_classes=outputClass[self.args.data_set])
-            else:
-                raise ValueError(f"Not support {self.args.model} from FjORD paper")
+        if self.args.model == "fjord-cnn":
+            from fjord_models.fjord_cnn import FjORD_CNN
+            self.model = FjORD_CNN(num_classes=outputClass[self.args.data_set])
         else:
             self.model = init_model()
 
@@ -61,8 +58,11 @@ class FjORD_Aggregator(Aggregator):
         for ratio, _ in self.dp:
             submodel = sample_subnetwork(self.model, ratio)
             self.sub_models[tier] = submodel
-            self.sub_model_weights[ratio] = submodel.state_dict()
+            self.sub_model_weights[tier] = submodel.state_dict()
             tier += 1
+        for tier in self.sub_models:
+            logging.info(f"log tier {tier} model:")
+            logging.info(f"{self.sub_models[tier]}")
 
     def client_register_handler(self, executorId, info):
         """Triggered once receive new executor registration.
@@ -83,13 +83,14 @@ class FjORD_Aggregator(Aggregator):
             clientId = (
                     self.num_of_clients + 1) if self.experiment_mode == commons.SIMULATION_MODE else executorId
 
-            if self.args.model_zoo == "fjord_paper":
+            if self.args.model[:5] == "fjord":
                 probability = [prob for _, prob in self.dp]
                 one_hot = np.random.multinomial(1, probability)
                 for rank, res in enumerate(one_hot):
                     if res == 1:
                         tier = rank
-                self.client_tier[clientId] = rank
+                self.client_tier[clientId] = tier
+                # logging.info(f"partition client {clientId} into tier {tier}")
             self.client_manager.register_client(
                 executorId, clientId, size=_size, speed=systemProfile)
             self.client_manager.registerDuration(
@@ -115,10 +116,15 @@ class FjORD_Aggregator(Aggregator):
             dictionary: Client training config.
 
         """
+        if self.round == self.args.rounds // 2:
+            self.args.learning_rate /= 10
+        elif self.round == self.args.rounds * 3 // 4:
+            self.args.learning_rate /= 10
         conf = {
             'learning_rate': self.args.learning_rate,
-            'p': self.client_tier[clientId],
-            'p_pool': [self.dp[tier][0] for tier in self.dp],
+            'tier': self.client_tier[clientId],
+            'p': self.dp[self.client_tier[clientId]][0],
+            'p_pool': [self.dp[tier][0] for tier in range(len(self.dp))],
         }
         return conf
 
@@ -144,7 +150,8 @@ class FjORD_Aggregator(Aggregator):
                     layer.set_weights([p.cpu().detach().numpy()
                                       for p in self.model_weights[layer.name]])
             else:
-                for tier, model_weights in self.sub_model_weights:
+                for tier in self.sub_model_weights:
+                    model_weights = self.sub_model_weights[tier]
                     self.sub_models[tier].load_state_dict(model_weights)
                 current_grad_weights = [param.data.clone()
                                         for param in self.model.parameters()]
@@ -153,6 +160,7 @@ class FjORD_Aggregator(Aggregator):
 
 
     def aggregate_client_weights(self, results):
+        self.trained_data_size += results["trained_size"]
         for p in results["update_weight"]:
             param_weight = results["update_weight"][p]
             if isinstance(param_weight, list):
@@ -160,17 +168,15 @@ class FjORD_Aggregator(Aggregator):
             param_weight = torch.from_numpy(
                 param_weight).to(device=self.device)
 
-            for _, model_weights in self.sub_model_weights:
+            for tier in self.sub_model_weights:
+                model_weights = self.sub_model_weights[tier]
                 self.aggregate_weight_helper(param_weight, p, model_weights, results["trained_size"])
 
                 if self.model_in_update == self.tasks_round:
-                    for p in model_weights:
-                        for idx in range(len(self.model_weights[p])):
-                            d_type = self.model_weights[p][idx].data.dtype
-
-                            self.model_weights[p][idx].data = (
-                                    self.model_weights[p][idx].data / float(self.trained_data_size)
-                            ).to(dtype=d_type)
+                    d_type = self.sub_model_weights[tier][p].data.dtype
+                    self.sub_model_weights[tier][p].data = (
+                            self.sub_model_weights[tier][p].data / float(self.trained_data_size)
+                    ).to(dtype=d_type)
         if self.model_in_update == self.tasks_round:
             self.trained_data_size = 0
 
@@ -180,45 +186,107 @@ class FjORD_Aggregator(Aggregator):
             model_weight[weight_name] = weight
         elif weight.dim() == 1:
             dim1 = min(weight.shape[0], model_weight[weight_name].shape[0])
-            if weight.shape[0] <= model_weight[weight_name].shape[0]:
-                if self.model_in_update == 0:
-                    model_weight[weight_name][:dim1] = weight * data_size
-                else:
-                    model_weight[weight_name][:dim1] += weight * data_size
+            if self.model_in_update == 1:
+                # logging.info(f"initing {weight_name}")
+                model_weight[weight_name][:dim1] = weight[:dim1] * data_size
             else:
-                if self.model_in_update == 0:
-                    model_weight[weight_name] = weight[:dim1] * data_size
-                else:
-                    model_weight[weight_name] += weight[:dim1] * data_size
+                model_weight[weight_name][:dim1] += weight[:dim1] * data_size
         elif weight.dim() == 2:
             dim1 = min(weight.shape[0], model_weight[weight_name].shape[0])
             dim2 = min(weight.shape[1], model_weight[weight_name].shape[1])
-            if weight.shape[0] <= model_weight[weight_name].shape[0]:
-                if self.model_in_update == 0:
-                    model_weight[weight_name][:dim1, :dim2] = weight * data_size
-                else:
-                    model_weight[weight_name][:dim1, :dim2] += weight * data_size
+            if self.model_in_update == 1:
+                # logging.info(f"initing {weight_name}")
+                model_weight[weight_name][:dim1, :dim2] = weight[:dim1, :dim2] * data_size
             else:
-                if self.model_in_update == 0:
-                    model_weight[weight_name] = weight[:dim1, :dim2] * data_size
-                else:
-                    model_weight[weight_name] += weight[:dim1, :dim2] * data_size
+                model_weight[weight_name][:dim1, :dim2] += weight[:dim1, :dim2] * data_size
         elif weight.dim() == 4:
+            # logging.info(f"{weight_name}: {model_weight[weight_name].shape}, {weight.shape}")
             dim1 = min(weight.shape[0], model_weight[weight_name].shape[0])
             dim2 = min(weight.shape[1], model_weight[weight_name].shape[1])
             dim3 = min(weight.shape[2], model_weight[weight_name].shape[2])
             dim4 = min(weight.shape[3], model_weight[weight_name].shape[3])
-            if weight.shape[0] <= model_weight[weight_name].shape[0]:
-                if self.model_in_update == 0:
-                    model_weight[weight_name][:dim1, :dim2, :dim3, :dim4] = weight * data_size
-                else:
-                    model_weight[weight_name][:dim1, :dim2, :dim3, :dim4] += weight * data_size
+            if self.model_in_update == 1:
+                # logging.info(f"initing {weight_name}")
+                model_weight[weight_name][:dim1, :dim2, :dim3, :dim4] = weight[:dim1, :dim2, :dim3, :dim4] * data_size
             else:
-                if self.model_in_update == 0:
-                    model_weight[weight_name] = weight[:dim1, :dim2, :dim3, :dim4] * data_size
-                else:
-                    model_weight[weight_name] += weight[:dim1, :dim2, :dim3, :dim4] * data_size
+                model_weight[weight_name][:dim1, :dim2, :dim3, :dim4] += weight[:dim1, :dim2, :dim3, :dim4] * data_size
         else:
             raise Exception(f"unsupported weight shape: {weight.shape}")
 
+    def round_completion_handler(self):
+        """Triggered upon the round completion, it registers the last round execution info,
+        broadcast new tasks for executors and select clients for next round.
+        """
+        logging.info(f"debug check {self.sub_models[0].state_dict()['conv1.weight'][0,0,0,0]}")
+
+        self.global_virtual_clock += self.round_duration
+        self.round += 1
+
+        # handle the global update w/ current and last
+        self.round_weight_handler(self.last_gradient_weights)
+
+        avgUtilLastround = sum(self.stats_util_accumulator) / \
+            max(1, len(self.stats_util_accumulator))
+        # assign avg reward to explored, but not ran workers
+        for clientId in self.round_stragglers:
+            self.client_manager.register_feedback(clientId, avgUtilLastround,
+                                              time_stamp=self.round,
+                                              duration=self.virtual_client_clock[clientId]['computation'] +
+                                              self.virtual_client_clock[clientId]['communication'],
+                                              success=False)
+
+        avg_loss = sum(self.loss_accumulator) / \
+            max(1, len(self.loss_accumulator))
+        logging.info(f"Wall clock: {round(self.global_virtual_clock)} s, round: {self.round}, Planned participants: " +
+                     f"{len(self.sampled_participants)}, Succeed participants: {len(self.stats_util_accumulator)}, Training loss: {avg_loss}")
+
+        # dump round completion information to tensorboard
+        if len(self.loss_accumulator):
+            self.log_train_result(avg_loss)
+
+        # update select participants
+        self.sampled_participants = self.select_participants(
+            select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
+        (clientsToRun, round_stragglers, virtual_client_clock, round_duration, flatten_client_duration) = self.tictak_client_tasks(
+            self.sampled_participants, self.args.num_participants)
+
+        logging.info(f"Selected participants to run: {clientsToRun}")
+
+        # Issue requests to the resource manager; Tasks ordered by the completion time
+        self.resource_manager.register_tasks(clientsToRun)
+        self.tasks_round = len(clientsToRun)
+
+        # Update executors and participants
+        if self.experiment_mode == commons.SIMULATION_MODE:
+            self.sampled_executors = list(
+                self.individual_client_events.keys())
+        else:
+            self.sampled_executors = [str(c_id)
+                                      for c_id in self.sampled_participants]
+
+        self.save_last_param()
+        self.round_stragglers = round_stragglers
+        self.virtual_client_clock = virtual_client_clock
+        self.flatten_client_duration = np.array(flatten_client_duration)
+        self.round_duration = round_duration
+        self.model_in_update = 0
+        self.test_result_accumulator = []
+        self.stats_util_accumulator = []
+        self.client_training_results = []
+        self.loss_accumulator = []
+        self.update_default_task_config()
+
+        if self.round >= self.args.rounds:
+            self.broadcast_aggregator_events(commons.SHUT_DOWN)
+        elif self.round % self.args.eval_interval == 0:
+            self.broadcast_aggregator_events(commons.UPDATE_MODEL)
+            self.broadcast_aggregator_events(commons.MODEL_TEST)
+        else:
+            self.broadcast_aggregator_events(commons.UPDATE_MODEL)
+            self.broadcast_aggregator_events(commons.START_ROUND)
+
+
+if __name__ == "__main__":
+    aggregator = FjORD_Aggregator(parser.args)
+    aggregator.run()
 

@@ -92,13 +92,16 @@ class FjORD_Client(Client):
             target = Variable(target).to(device=conf.device)
 
             # sample a submodel
-            valid_p = [p_value for p_value in conf.p_pool if p_value <= conf.p_max]
+            valid_p = [p_value for p_value in conf.p_pool if p_value <= self.p_max]
             p_value = random.choice(valid_p)
-            ratio = p_value / conf.p_max
+            ratio = p_value / self.p_max
             sub_model = sample_subnetwork(max_model, ratio)
+            logging.info(f"sampled submodel with ratio {ratio}")
 
             # set up sub_model
             sub_model.to(device=conf.device)
+            sub_model.train()
+            sub_optimizer = self.get_optimizer(sub_model, conf)
 
             # set up max_model
             max_model.to(device=conf.device)
@@ -115,11 +118,11 @@ class FjORD_Client(Client):
                 outputs_max = max_model(data, labels=target)
                 # loss = outputs[0]
             else:
-                output_sub = sub_model(data)
-                output_max = max_model(data)
+                outputs_sub = sub_model(data)
+                outputs_max = max_model(data)
 
             # KD defined loss
-            loss = CE(output_max, target) + KL(output_sub, outputs_max)
+            loss = CE(outputs_max, target) + KL(outputs_sub, outputs_max)
 
             # ======== collect training feedback for other decision components [e.g., oort selector] ======
 
@@ -137,13 +140,14 @@ class FjORD_Client(Client):
                 if self.epoch_train_loss == 1e-4:
                     self.epoch_train_loss = temp_loss
                 else:
-                    self.epoch_train_loss = (
-                                                    1. - conf.loss_decay) * self.epoch_train_loss + conf.loss_decay * temp_loss
+                    self.epoch_train_loss = (1. - conf.loss_decay) * self.epoch_train_loss + conf.loss_decay * temp_loss
 
             # ========= Define the backward loss ==============
             max_optimizer.zero_grad()
+            sub_optimizer.zero_grad()
             loss.backward()
             max_optimizer.step()
+            sub_optimizer.step()
 
             # ========= Weight handler ========================
             self.optimizer.update_client_weight(
@@ -158,6 +162,21 @@ class FjORD_Client(Client):
                 break
 
     def train_step(self, client_data, conf, max_model):
+        # sample a submodel
+        valid_p = [p_value for p_value in conf.p_pool if p_value <= self.p_max]
+        p_value = random.choice(valid_p)
+        ratio = p_value / self.p_max
+        logging.info(f"sampled sub-{p_value} model")
+        # ratio = 1.0
+        sub_model = sample_subnetwork(max_model, ratio)
+
+        # set up sub_model
+        sub_model.to(device=conf.device)
+        sub_model.train()
+        optimizer = self.get_optimizer(sub_model, conf)
+        criterion = torch.nn.CrossEntropyLoss(reduction='none').to(device=conf.device)
+        # logging.info(f"debug check {conf.clientId}: {max_model.state_dict()['conv1.weight'][0,0,0,0]}")
+
         for data_pair in client_data:
             # data&target preprocess
             if conf.task == 'nlp':
@@ -192,18 +211,6 @@ class FjORD_Client(Client):
                 data = Variable(data).to(device=conf.device)
 
             target = Variable(target).to(device=conf.device)
-
-            # sample a submodel
-            valid_p = [p_value for p_value in conf.p_pool if p_value <= conf.p_max]
-            p_value = random.choice(valid_p)
-            ratio = p_value / conf.p_max
-            sub_model = sample_subnetwork(max_model, ratio)
-
-            # set up sub_model
-            sub_model.to(device=conf.device)
-            sub_model.train()
-            optimizer = self.get_optimizer(sub_model, conf)
-            criterion = torch.nn.CrossEntropyLoss(reduction='none').to(device=conf.device)
 
             # forward model
             if conf.task == 'nlp':
@@ -244,6 +251,7 @@ class FjORD_Client(Client):
             else:
                 loss_list = loss.tolist()
                 loss = loss.mean()
+                # logging.info(f"current loss {loss}")
 
             temp_loss = sum(loss_list) / float(len(loss_list))
             self.loss_squre = sum([l ** 2 for l in loss_list]
@@ -254,24 +262,29 @@ class FjORD_Client(Client):
                     self.epoch_train_loss = temp_loss
                 else:
                     self.epoch_train_loss = (
-                                                    1. - conf.loss_decay) * self.epoch_train_loss + conf.loss_decay * temp_loss
-
+                        1. - conf.loss_decay) * self.epoch_train_loss + conf.loss_decay * temp_loss
+            self.epoch_train_loss = temp_loss
             # ========= Define the backward loss ==============
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             # ========= Weight handler ========================
-            self.optimizer.update_client_weight(
-                conf, sub_model, self.global_model if self.global_model is not None else None)
+            # self.optimizer.update_client_weight(
+            #     conf, sub_model, self.global_model if self.global_model is not None else None)
 
-            # update the weights of max_model
-            max_model = load_sub_model(max_model, sub_model)
+            # debug update
+            # logging.info(f"debug check {max_model.state_dict()['conv1.weight'][0,0,0,0]}")
 
             self.completed_steps += 1
 
-            if self.completed_steps == conf.local_steps:
-                break
+            # if self.completed_steps == conf.local_steps:
+            #     break
+                    # update the weights of max_model
+        # logging.info(f"debug check {conf.clientId}: {max_model.state_dict()['conv1.weight'][0,0,0,0]}")
+        max_model = load_sub_model(max_model, sub_model)
+        # logging.info(f"debug check {conf.clientId}: {max_model.state_dict()['conv1.weight'][0,0,0,0]}")
+        return max_model
 
 
     def train(self, client_data, max_model, conf):
@@ -295,21 +308,21 @@ class FjORD_Client(Client):
         # NOTE: If one may hope to run fixed number of epochs, instead of iterations,
         # train for one epoch
         while self.completed_steps < conf.local_steps * len(client_data):
-            try:
-                if conf.kd:
-                    self.train_step_kd(client_data, conf, max_model)
-                else:
-                    self.train_step(client_data, conf, max_model)
-            except Exception as ex:
-                error_type = ex
-                break
+            # try:
+            if conf.kd:
+                self.train_step_kd(client_data, conf, max_model)
+            else:
+                max_model = self.train_step(client_data, conf, max_model)
+            # except Exception as ex:
+            #     error_type = ex
+            #     break
 
         state_dicts = max_model.state_dict()
         model_param = {p: state_dicts[p].data.cpu().numpy()
                        for p in state_dicts}
         results = {'clientId': clientId, 'moving_loss': self.epoch_train_loss,
                    'trained_size': self.completed_steps * conf.batch_size,
-                   'success': self.completed_steps == conf.local_steps}
+                   'success': self.completed_steps == conf.local_steps * len(client_data)}
 
         if error_type is None:
             logging.info(f"Training of (CLIENT: {clientId}) completes, {results}")
