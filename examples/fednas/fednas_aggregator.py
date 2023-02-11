@@ -154,7 +154,8 @@ class FedNAS_Aggregator(Aggregator):
 
         if self.round >= self.args.rounds:
             self.broadcast_aggregator_events(commons.SHUT_DOWN)
-        elif self.round % self.args.eval_interval == 0:
+        elif self.round % self.args.eval_interval == 0 and self.stage == "train":
+            # disable testing when searching
             self.broadcast_aggregator_events(commons.UPDATE_MODEL)
             self.broadcast_aggregator_events(commons.MODEL_TEST)
         else:
