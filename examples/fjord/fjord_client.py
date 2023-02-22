@@ -167,7 +167,7 @@ class FjORD_Client(Client):
         p_value = random.choice(valid_p)
         ratio = p_value / self.p_max
         logging.info(f"sampled sub-{p_value} model")
-        # ratio = 1.0
+        ratio = 1.0
         sub_model = sample_subnetwork(max_model, ratio)
 
         # set up sub_model
@@ -296,8 +296,7 @@ class FjORD_Client(Client):
         max_model = max_model.to(device=device)
         max_model.train()
 
-        trained_unique_samples = min(
-            len(client_data.dataset), conf.local_steps * conf.batch_size)
+        trained_unique_samples = len(client_data.dataset)
         self.global_model = None
 
         # disable fed-prox
@@ -321,7 +320,7 @@ class FjORD_Client(Client):
         model_param = {p: state_dicts[p].data.cpu().numpy()
                        for p in state_dicts}
         results = {'clientId': clientId, 'moving_loss': self.epoch_train_loss,
-                   'trained_size': self.completed_steps * conf.batch_size,
+                   'trained_size': len(client_data.dataset),
                    'success': self.completed_steps == conf.local_steps * len(client_data)}
 
         if error_type is None:

@@ -222,6 +222,9 @@ parser.add_argument('--no-bidirectional', dest='bidirectional', action='store_fa
 parser.add_argument('--uniform', type=int, default=5)
 parser.add_argument('--drop_scale', type=float, default=1.0)
 parser.add_argument('--kd', type=str, default="False")
+parser.add_argument('--client_eval_interval', type=int, default=20)
+parser.add_argument('--model_name', type=str, default="None")
+parser.add_argument('--test_data_map_file', type=str, default=None)
 
 args, unkown = parser.parse_known_args()
 args.use_cuda = eval(args.use_cuda)
